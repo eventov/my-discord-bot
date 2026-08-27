@@ -46,6 +46,9 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 user_cooldowns = {}
 user_link_warnings = {}
 
+# זיכרון לשמירת ההזמנות של השרת
+invites_cache = {}
+
 LINK_REGEX = re.compile(r'https?://[^\s]+|discord\.gg/[^\s]+', re.IGNORECASE)
 
 
@@ -55,6 +58,63 @@ def is_staff(user: discord.Member) -> bool:
         return True
     user_role_ids = [r.id for r in user.roles]
     return any(role_id in user_role_ids for role_id in HELPER_ROLE_IDS)
+
+
+# --- תצוגת כפתור בדיקת הזמנות ---
+class CheckInvitesView(discord.ui.View):
+
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="לחץ פה כדי לראות כמה אנשים הבאת! 📩",
+        style=discord.ButtonStyle.green,
+        custom_id="check_invites_btn",
+    )
+    async def check_invites(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        guild = interaction.guild
+        user = interaction.user
+
+        total_invites = 0
+        try:
+            guild_invites = await guild.invites()
+            for invite in guild_invites:
+                if invite.inviter and invite.inviter.id == user.id:
+                    total_invites += invite.uses
+        except discord.Forbidden:
+            pass
+
+        dm_embed = discord.Embed(
+            title="📊 נתוני ההזמנות שלך",
+            description=f"שלום {user.display_name},\nבדיקת ההזמנות שלך בשרת **{guild.name}**:",
+            color=discord.Color.blue(),
+        )
+        dm_embed.add_field(
+            name="✉️ סך הכל אנשים שהבאת:",
+            value=f"**{total_invites}** משתמשים",
+            inline=False,
+        )
+        dm_embed.set_footer(text="תודה שאתה עוזר להגדיל את הקהילה שלנו!")
+
+        dm_sent = False
+        try:
+            await user.send(embed=dm_embed)
+            dm_sent = True
+        except discord.Forbidden:
+            dm_sent = False
+
+        if dm_sent:
+            await interaction.response.send_message(
+                "📩 נתוני ההזמנות שלך נשלחו אליך בהודעה פרטית!",
+                ephemeral=True,
+            )
+        else:
+            await interaction.response.send_message(
+                f"❌ לא הצלחנו לשלוח לך הודעה פרטית. יש לך כרגע **{total_invites}** הזמנות. (ודא שהודעות פרטיות פתוחות אצלך)",
+                ephemeral=True,
+            )
 
 
 # --- תצוגת כפתור דרופ ---
@@ -109,8 +169,7 @@ class TicketControlView(discord.ui.View):
     ):
         if not is_staff(interaction.user):
             await interaction.response.send_message(
-                "אין לך הרשאה לסגור טיקט זה! רק צוות התמיכה יכול לסגור"
-                " טיקטים.",
+                "אין לך הרשאה לסגור טיקט זה! רק צוות התמיכה יכול לסגור טיקטים.",
                 ephemeral=True,
             )
             return
@@ -154,8 +213,7 @@ class TicketControlView(discord.ui.View):
 
         await interaction.response.edit_message(view=self)
         await interaction.followup.send(
-            f"**{interaction.user.display_name}** לקח את הטיקט ויתפנה לעזרתך"
-            " בהקדם!"
+            f"**{interaction.user.display_name}** לקח את הטיקט ויתפנה לעזרתך בהקדם!"
         )
 
 
@@ -192,8 +250,7 @@ class CreateTicketView(discord.ui.View):
             remaining = int(user_cooldowns[user.id] - current_time)
             if remaining > 0:
                 await interaction.response.send_message(
-                    f"עליך להמתין עוד {remaining} שניות לפני שתוכל לפתוח טיקט"
-                    " חדש.",
+                    f"עליך להמתין עוד {remaining} שניות לפני שתוכל לפתוח טיקט חדש.",
                     ephemeral=True,
                 )
                 return
@@ -234,8 +291,7 @@ class CreateTicketView(discord.ui.View):
         ticket_embed = discord.Embed(
             title=f"שלום {user.display_name} 👋",
             description=(
-                "תודה שפנית לצוות התמיכה!\nפרט את סיבת הפנייה וצוות התמיכה יענה"
-                " לך בהקדם."
+                "תודה שפנית לצוות התמיכה!\nפרט את סיבת הפנייה וצוות התמיכה יענה לך בהקדם."
             ),
             color=discord.Color.blue(),
         )
@@ -266,15 +322,13 @@ async def on_message(message: discord.Message):
             duration_minutes = 5
             embed_title = "⚠️ קיבלת טיימאוט! (אזהרה ראשונה)"
             warning_text = (
-                "חל איסור לשלוח קישורים בשרת. פעם הבאה שתשלח קישור תקבל"
-                " טיימאוט ל-10 דקות!"
+                "חל איסור לשלוח קישורים בשרת. פעם הבאה שתשלח קישור תקבל טיימאוט ל-10 דקות!"
             )
         elif current_warnings == 2:
             duration_minutes = 10
             embed_title = "⚠️ קיבלת טיימאוט! (אזהרה שנייה)"
             warning_text = (
-                "זוהי אזהרה שנייה! פעם הבאה שתשלח קישור תקבל טיימאוט ליום שלם"
-                " (24 שעות)!"
+                "זוהי אזהרה שנייה! פעם הבאה שתשלח קישור תקבל טיימאוט ליום שלם (24 שעות)!"
             )
         else:
             duration_minutes = 1440
@@ -295,8 +349,7 @@ async def on_message(message: discord.Message):
             )
         except discord.Forbidden:
             print(
-                f"[שגיאה] לא ניתן לתת טיימאוט ל-{message.author.name} (משתמש"
-                " אדמין או רול בוט נמוך)."
+                f"[שגיאה] לא ניתן לתת טיימאוט ל-{message.author.name} (משתמש אדמין או רול בוט נמוך)."
             )
         except Exception as e:
             print(f"[שגיאה בטיימאוט] {e}")
@@ -306,8 +359,7 @@ async def on_message(message: discord.Message):
         embed = discord.Embed(
             title=embed_title,
             description=(
-                "הורחקת זמנית מדיבור בשרת"
-                f" **{message.guild.name}** על שליחת קישור."
+                f"הורחקת זמנית מדיבור בשרת **{message.guild.name}** על שליחת קישור."
             ),
             color=discord.Color.red(),
         )
@@ -335,8 +387,7 @@ async def on_message(message: discord.Message):
             print(f"נשלחה הודעה פרטית ל-{message.author.name}")
         except discord.Forbidden:
             print(
-                f"לא ניתן לשלוח הודעה פרטית ל-{message.author.name} (הודעות"
-                " פרטיות חסומות)."
+                f"לא ניתן לשלוח הודעה פרטית ל-{message.author.name} (הודעות פרטיות חסומות)."
             )
 
         return
@@ -344,7 +395,7 @@ async def on_message(message: discord.Message):
     await bot.process_commands(message)
 
 
-# --- אירוע הצטרפות משתמש חדש ---
+# --- אירוע הצטרפות משתמש חדש + מעקב ממי הוא בא ---
 @bot.event
 async def on_member_join(member: discord.Member):
     role = member.guild.get_role(AUTO_ROLE_ID)
@@ -356,13 +407,31 @@ async def on_member_join(member: discord.Member):
                 "אין הרשאה לתת את הרול (ודא שרול הבוט גבוה יותר ברשימה)."
             )
 
+    # מציאת המזמין
+    inviter = None
+    old_invites = invites_cache.get(member.guild.id, [])
+    try:
+        new_invites = await member.guild.invites()
+        for old_inv in old_invites:
+            for new_inv in new_invites:
+                if old_inv.code == new_inv.code:
+                    if new_inv.uses > old_inv.uses:
+                        inviter = new_inv.inviter
+                        break
+        invites_cache[member.guild.id] = new_invites
+    except discord.Forbidden:
+        pass
+
     welcome_channel = member.guild.get_channel(WELCOME_CHANNEL_ID)
     if welcome_channel:
+        inviter_text = f"הוזמן/ה על ידי {inviter.mention}" if inviter else "הצטרף/ה באופן עצמאי"
+
         embed = discord.Embed(
             title="ברוך הבא לשרת! 🎉",
             description=(
-                f"שלום {member.mention}, שמחים שהצטרפת אלינו!\nמאחלים לך שהות"
-                " מהנה בשרת."
+                f"שלום {member.mention}, שמחים שהצטרפת אלינו!\n"
+                f"📌 **ממי הגיע:** {inviter_text}\n"
+                "מאחלים לך שהות מהנה בשרת."
             ),
             color=discord.Color.green(),
         )
@@ -379,7 +448,33 @@ async def on_member_join(member: discord.Member):
 async def on_ready():
     bot.add_view(CreateTicketView())
     bot.add_view(TicketControlView())
+    bot.add_view(CheckInvitesView())
+
+    # טעינת ההזמנות לזיכרון עבור מעקב הצטרפות
+    for guild in bot.guilds:
+        try:
+            invites_cache[guild.id] = await guild.invites()
+        except discord.Forbidden:
+            invites_cache[guild.id] = []
+
     print(f'הבוט מחובר בתור {bot.user}')
+
+
+# --- פקודת פאנל בדיקת הזמנות ---
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def setup_invites(ctx):
+    await ctx.message.delete()
+
+    embed = discord.Embed(
+        title="📊 בדיקת הזמנות",
+        description="רוצה לדעת כמה חברים הזמנת לשרת?\nלחץ על הכפתור למטה והבוט ישלח לך את הנתונים בפרטי!",
+        color=discord.Color.blue(),
+    )
+    if ctx.guild.icon:
+        embed.set_thumbnail(url=ctx.guild.icon.url)
+
+    await ctx.send(embed=embed, view=CheckInvitesView())
 
 
 # --- פקודת DROP ---
@@ -414,8 +509,7 @@ async def setup_ticket(ctx):
     embed = discord.Embed(
         title="🎫 מערכת תמיכה ופניות",
         description=(
-            "זקוק לעזרה? רוצה לפתוח פנייה לצוות השרת?\nלחץ על הכפתור למטה כדי"
-            " לפתוח טיקט פרטי!"
+            "זקוק לעזרה? רוצה לפתוח פנייה לצוות השרת?\nלחץ על הכפתור למטה כדי לפתוח טיקט פרטי!"
         ),
         color=discord.Color.gold(),
     )
