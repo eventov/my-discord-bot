@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import re
 from datetime import datetime, timedelta, timezone
@@ -37,7 +38,7 @@ TICKET_CATEGORY_ID = 1542165598853922958
 WELCOME_CHANNEL_ID = 1542508702169571529
 AUTO_ROLE_ID = 1540365463706669136
 
-# רשימת המורשים: שים כאן את ה-ID שלך + 4 ה-IDs של החברים שלך
+# רשימת המורשים: ה-ID שלך + 4 ה-IDs של החברים שלך
 ALLOWED_USER_IDS = [
     1228062821690904748,  # ה-ID שלך
     1519071293519953974,  # ID חבר 1
@@ -45,6 +46,8 @@ ALLOWED_USER_IDS = [
     000000000000000000,  # ID חבר 3
     000000000000000000,  # ID חבר 4
 ]
+
+INVITES_FILE = "invites_data.json"
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -57,6 +60,38 @@ user_link_warnings = {}
 invites_cache = {}
 
 LINK_REGEX = re.compile(r'https?://[^\s]+|discord\.gg/[^\s]+', re.IGNORECASE)
+
+
+# --- פונקציות שמירה וטעינה של הזמנות למאגר קבוע ---
+def load_invites_data():
+    if not os.path.exists(INVITES_FILE):
+        return {}
+    try:
+        with open(INVITES_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"שגיאה שטעינת קובץ ההזמנות: {e}")
+        return {}
+
+
+def save_invites_data(data):
+    try:
+        with open(INVITES_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4)
+    except Exception as e:
+        print(f"שגיאה בשמירת קובץ ההזמנות: {e}")
+
+
+def add_invite_count(user_id: int):
+    data = load_invites_data()
+    str_id = str(user_id)
+    data[str_id] = data.get(str_id, 0) + 1
+    save_invites_data(data)
+
+
+def get_invite_count(user_id: int) -> int:
+    data = load_invites_data()
+    return data.get(str(user_id), 0)
 
 
 # פונקציית עזר לבדיקה אם המשתמש הוא Helper או Admin
@@ -100,14 +135,8 @@ class CheckInvitesView(discord.ui.View):
         guild = interaction.guild
         user = interaction.user
 
-        total_invites = 0
-        try:
-            guild_invites = await guild.invites()
-            for invite in guild_invites:
-                if invite.inviter and invite.inviter.id == user.id:
-                    total_invites += invite.uses
-        except discord.Forbidden:
-            pass
+        # משיכת סך ההזמנות מתוך מסד הנתונים
+        total_invites = get_invite_count(user.id)
 
         dm_embed = discord.Embed(
             title="📊 נתוני ההזמנות שלך",
@@ -135,7 +164,7 @@ class CheckInvitesView(discord.ui.View):
             )
         else:
             await interaction.response.send_message(
-                f"❌ לא הצלחנו לשלוח לך הודעה פרטית. יש לך כרגע **{total_invites}** הזמנות. (ודא שהודעות פרטיות פתוחות אצלך)",
+                f"❌ לא הצלחנו לשלוח לך הודעה פרטית. יש לך כרגע **{total_invites}** הזמנות.",
                 ephemeral=True,
             )
 
@@ -418,7 +447,7 @@ async def on_message(message: discord.Message):
     await bot.process_commands(message)
 
 
-# --- אירוע הצטרפות משתמש חדש + מעקב ממי הוא בא ---
+# --- אירוע הצטרפות משתמש חדש + מעקב והוספת ניקוד ---
 @bot.event
 async def on_member_join(member: discord.Member):
     role = member.guild.get_role(AUTO_ROLE_ID)
@@ -443,6 +472,10 @@ async def on_member_join(member: discord.Member):
         invites_cache[member.guild.id] = new_invites
     except discord.Forbidden:
         pass
+
+    # במידה וזוהה מציע, מעדכן ומעלה לו את מספר ההזמנות במסד
+    if inviter and not inviter.bot:
+        add_invite_count(inviter.id)
 
     welcome_channel = member.guild.get_channel(WELCOME_CHANNEL_ID)
     if welcome_channel:
@@ -482,6 +515,20 @@ async def on_ready():
 
 
 # --- פקודות מוגבלות למשתמשים מורשים בלבד ---
+
+# פקודה להגדרת/עדכון מספר ההזמנות של משתמש ידנית בצ'אט
+@bot.command()
+@is_allowed_user()
+async def setinvites(ctx, member: discord.Member = None, amount: int = None):
+    if not member or amount is None:
+        await ctx.send("❌ שימוש שגוי! דוגמה: `!setinvites @user 5`", delete_after=5)
+        return
+
+    data = load_invites_data()
+    data[str(member.id)] = amount
+    save_invites_data(data)
+
+    await ctx.send(f"✅ עודכן בהצלחה! ל-{member.mention} יש עכשיו **{amount}** הזמנות.")
 
 
 @bot.command(name="מחיקה", aliases=["clear", "purge"])
