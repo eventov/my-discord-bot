@@ -287,7 +287,7 @@ def is_allowed_user():
         return False
     return commands.check(predicate)
 
-# --- Modal (טופס קלטים לשליחת הודעה בפרטי) ---
+# --- Modal מעודכן (מאפשר לבקש להעלות קובץ מיד לאחר מכן) ---
 class SendDMModal(discord.ui.Modal, title="שליחת הודעה פרטית למשתמש"):
     user_id_input = discord.ui.TextInput(
         label="ID של המשתמש",
@@ -300,7 +300,7 @@ class SendDMModal(discord.ui.Modal, title="שליחת הודעה פרטית למ
         label="מה לשלוח?",
         style=discord.TextStyle.paragraph,
         placeholder="כתוב את ההודעה שברצונך לשלוח...",
-        required=True,
+        required=False,
         max_length=2000
     )
 
@@ -315,18 +315,54 @@ class SendDMModal(discord.ui.Modal, title="שליחת הודעה פרטית למ
             await interaction.response.send_message("❌ לא נמצא משתמש עם ה-ID הזה!", ephemeral=True)
             return
 
+        message_text = self.message_input.value or ""
+
+        # שליחת הודעה זמנית שמבקשת להעלות קובץ (אם רוצים)
+        await interaction.response.send_message(
+            "⏳ **רוצה לצרף קובץ/תמונה להודעה?**\n"
+            "שלח עכשיו את הקובץ בצ'אט בתוך **30 שניות** (או כתוב `no` / חכה לסיום הזמן כדי לשלוח רק טקסט).",
+            ephemeral=True
+        )
+
+        files_to_send = []
+
+        def check(m):
+            return m.author.id == interaction.user.id and m.channel.id == interaction.channel.id
+
+        try:
+            msg = await interaction.client.wait_for('message', timeout=30.0, check=check)
+            if msg.attachments:
+                for attachment in msg.attachments:
+                    file = await attachment.to_file()
+                    files_to_send.append(file)
+                try:
+                    await msg.delete() # מחיקת הקובץ מהצ'אט הציבורי למען הסדר
+                except Exception:
+                    pass
+            elif msg.content.lower() == 'no':
+                try:
+                    await msg.delete()
+                except Exception:
+                    pass
+        except asyncio.TimeoutError:
+            pass # אם עברו 30 שניות ולא נשלח קובץ, ממשיכים בשליחת הטקסט בלבד
+
+        if not message_text and not files_to_send:
+            await interaction.followup.send("❌ לא הזנת טקסט ולא צירפת קובץ, השליחה בוטלה.", ephemeral=True)
+            return
+
         embed = discord.Embed(
             title="📩 קיבלת הודעה מצוות הנהלת השרת",
-            description=self.message_input.value,
+            description=message_text if message_text else None,
             color=discord.Color.blue()
         )
         embed.set_footer(text=f"נשלח משרת {interaction.guild.name}")
 
         try:
-            await target_user.send(embed=embed)
-            await interaction.response.send_message(f"✅ ההודעה נשלחה בהצלחה ל-{target_user.mention}!", ephemeral=True)
+            await target_user.send(embed=embed, files=files_to_send)
+            await interaction.followup.send(f"✅ ההודעה (והקבצים) נשלחו בהצלחה ל-{target_user.mention}!", ephemeral=True)
         except discord.Forbidden:
-            await interaction.response.send_message(f"❌ המשתמש {target_user.mention} סגר את ההודעות הפרטיות שלו.", ephemeral=True)
+            await interaction.followup.send(f"❌ המשתמש {target_user.mention} סגר את ההודעות הפרטיות שלו.", ephemeral=True)
 
 # --- תצוגת הפאנל עם הכפתור לשליחת הודעה ---
 class DMPanelView(discord.ui.View):
@@ -345,7 +381,7 @@ class DMPanelView(discord.ui.View):
         
         await interaction.response.send_modal(SendDMModal())
 
-# --- תצוגת כפתורי IP (מוסיפה לפאנלים הקיימים) ---
+# --- תצוגת כפתורי IP ---
 class IPPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -357,7 +393,6 @@ class IPPanelView(discord.ui.View):
         emoji="🌐"
     )
     async def open_ip_modal(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # בדיקת הרשאות - רק משתמשים מורשים או אדמינים
         if not (interaction.user.id in ALLOWED_USER_IDS or interaction.user.guild_permissions.administrator):
             await interaction.response.send_message("אין לך הרשאה להשתמש בפאנל זה!", ephemeral=True)
             return
@@ -570,8 +605,8 @@ async def on_ready():
     bot.add_view(CheckInvitesView())
     bot.add_view(DropView())
     bot.add_view(DMPanelView())
-    bot.add_view(IPButton())  # הוספת כפתור IP
-    bot.add_view(IPPanelView())  # הוספת פאנל IP
+    bot.add_view(IPButton())
+    bot.add_view(IPPanelView())
 
     for guild in bot.guilds:
         try:
