@@ -38,16 +38,17 @@ TICKET_CATEGORY_ID = 1542165598853922958
 WELCOME_CHANNEL_ID = 1542508702169571529
 AUTO_ROLE_ID = 1540365463706669136
 
-# רשימת המורשים: ה-ID שלך + 4 ה-IDs של החברים שלך
+# רשימת המורשים: ה-ID שלך + ה-IDs של החברים שלך
 ALLOWED_USER_IDS = [
     1228062821690904748,  # ה-ID שלך
-    1519071293519953974,  # ID חבר 1
-    1359539374496284917,  # ID חבר 2
-    000000000000000000,  # ID חבר 3
-    000000000000000000,  # ID חבר 4
+    1519071293519953974,
+    1359539374496284917,
+    000000000000000000,
+    000000000000000000,
 ]
 
 INVITES_FILE = "invites_data.json"
+TICKETS_FILE = "tickets_data.json"
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -58,20 +59,19 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 user_cooldowns = {}
 user_link_warnings = {}
 invites_cache = {}
-user_last_messages = {}  # מעקב אחרי ספאם של הודעות זהות
+user_last_messages = {}
 
 LINK_REGEX = re.compile(r'https?://[^\s]+|discord\.gg/[^\s]+', re.IGNORECASE)
 
 
-# --- פונקציות שמירה וטעינה של הזמנות למאגר קבוע ---
+# --- פונקציות ניהול נתוני הזמנות ---
 def load_invites_data():
     if not os.path.exists(INVITES_FILE):
         return {}
     try:
         with open(INVITES_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    except Exception as e:
-        print(f"שגיאה שטעינת קובץ ההזמנות: {e}")
+    except Exception:
         return {}
 
 
@@ -79,8 +79,8 @@ def save_invites_data(data):
     try:
         with open(INVITES_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=4)
-    except Exception as e:
-        print(f"שגיאה בשמירת קובץ ההזמנות: {e}")
+    except Exception:
+        pass
 
 
 def add_invite_count(user_id: int):
@@ -95,7 +95,87 @@ def get_invite_count(user_id: int) -> int:
     return data.get(str(user_id), 0)
 
 
-# פונקציית עזר לבדיקה אם המשתמש הוא Helper או Admin
+# --- פונקציות ניהול נתוני טיקטים ולוח מובילים ---
+def load_tickets_data():
+    if not os.path.exists(TICKETS_FILE):
+        return {"channel_id": None, "message_id": None, "users": {}}
+    try:
+        with open(TICKETS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {"channel_id": None, "message_id": None, "users": {}}
+
+
+def save_tickets_data(data):
+    try:
+        with open(TICKETS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4)
+    except Exception:
+        pass
+
+
+def add_ticket_count(user_id: int):
+    data = load_tickets_data()
+    str_id = str(user_id)
+    data["users"][str_id] = data["users"].get(str_id, 0) + 1
+    save_tickets_data(data)
+
+
+def create_leaderboard_embed(guild: discord.Guild) -> discord.Embed:
+    data = load_tickets_data()
+    users_data = data.get("users", {})
+
+    sorted_users = sorted(users_data.items(), key=lambda x: x[1], reverse=True)
+
+    embed = discord.Embed(
+        title="🏆 לוח מובילים - טיקטים שטופלו",
+        description="דירוג חברי הצוות לפי כמות הטיקטים שלקחו:",
+        color=discord.Color.gold(),
+    )
+
+    if not sorted_users:
+        embed.add_field(
+            name="מידע:", value="טרם נלקחו טיקטים במערכת.", inline=False
+        )
+    else:
+        medals = ["🥇", "🥈", "🥉"]
+        leaderboard_text = ""
+        for index, (user_id_str, count) in enumerate(sorted_users, start=1):
+            user_id = int(user_id_str)
+            member = guild.get_member(user_id)
+            name = member.mention if member else f"<@{user_id}>"
+
+            prefix = medals[index - 1] if index <= 3 else f"**#{index}**"
+            leaderboard_text += f"{prefix} {name} - **{count}** טיקטים\n"
+
+        embed.add_field(name="דירוג צוות:", value=leaderboard_text, inline=False)
+
+    embed.set_footer(
+        text="הנתונים מתעדכנים אוטומטית בכל פעם שאיש צוות לוקח טיקט!"
+    )
+    return embed
+
+
+async def update_leaderboard(guild: discord.Guild):
+    data = load_tickets_data()
+    channel_id = data.get("channel_id")
+    message_id = data.get("message_id")
+
+    if not channel_id or not message_id:
+        return
+
+    channel = guild.get_channel(channel_id)
+    if not channel:
+        return
+
+    try:
+        message = await channel.fetch_message(message_id)
+        embed = create_leaderboard_embed(guild)
+        await message.edit(embed=embed)
+    except Exception as e:
+        print(f"שגיאה בעדכון לוח המובילים: {e}")
+
+
 def is_staff(user: discord.Member) -> bool:
     if user.guild_permissions.administrator:
         return True
@@ -103,7 +183,6 @@ def is_staff(user: discord.Member) -> bool:
     return any(role_id in user_role_ids for role_id in HELPER_ROLE_IDS)
 
 
-# בדיקת הרשאה לפקודות ניהול (מוחקת הודעה ושולחת הודעה פרטית בכחול)
 def is_allowed_user():
     async def predicate(ctx):
         if (
@@ -112,16 +191,13 @@ def is_allowed_user():
         ):
             return True
 
-        # מחיקת הודעת הניסיון של המשתמש הלא מורשה
         try:
             await ctx.message.delete()
         except Exception:
             pass
 
-        # שליחת הודעה פרטית למשתמש הלא מורשה בלבד
         embed = discord.Embed(
-            description="מה אתה מנסה בכלל",
-            color=discord.Color.blue()
+            description="מה אתה מנסה בכלל", color=discord.Color.blue()
         )
         try:
             await ctx.author.send(embed=embed)
@@ -133,7 +209,7 @@ def is_allowed_user():
     return commands.check(predicate)
 
 
-# --- תצוגת כפתור בדיקת הזמנות ---
+# --- תצוגות וכפתורים ---
 class CheckInvitesView(discord.ui.View):
 
     def __init__(self):
@@ -149,7 +225,6 @@ class CheckInvitesView(discord.ui.View):
     ):
         guild = interaction.guild
         user = interaction.user
-
         total_invites = get_invite_count(user.id)
 
         dm_embed = discord.Embed(
@@ -164,26 +239,18 @@ class CheckInvitesView(discord.ui.View):
         )
         dm_embed.set_footer(text="תודה שאתה עוזר להגדיל את הקהילה שלנו!")
 
-        dm_sent = False
         try:
             await user.send(embed=dm_embed)
-            dm_sent = True
-        except discord.Forbidden:
-            dm_sent = False
-
-        if dm_sent:
             await interaction.response.send_message(
-                "📩 נתוני ההזמנות שלך נשלחו אליך בהודעה פרטית!",
-                ephemeral=True,
+                "📩 נתוני ההזמנות שלך נשלחו אליך בהודעה פרטית!", ephemeral=True
             )
-        else:
+        except discord.Forbidden:
             await interaction.response.send_message(
                 f"❌ לא הצלחנו לשלוח לך הודעה פרטית. יש לך כרגע **{total_invites}** הזמנות.",
                 ephemeral=True,
             )
 
 
-# --- תצוגת כפתור דרופ ---
 class DropView(discord.ui.View):
 
     def __init__(self, prize: str = ""):
@@ -211,15 +278,12 @@ class DropView(discord.ui.View):
         button.disabled = True
 
         await interaction.response.edit_message(view=self)
-
         ticket_link = "https://discord.com/channels/1539658262046048349/1542157535514075328"
         await interaction.followup.send(
-            f"🎉 {interaction.user.mention} זכית בדרופ!\n"
-            f"תפתח טיקט פה: {ticket_link}"
+            f"🎉 {interaction.user.mention} זכית בדרופ!\nתפתח טיקט פה: {ticket_link}"
         )
 
 
-# --- תצוגת הכפתורים בתוך הטיקט ---
 class TicketControlView(discord.ui.View):
 
     def __init__(self):
@@ -277,13 +341,16 @@ class TicketControlView(discord.ui.View):
         button.label = f"נלקח על ידי {interaction.user.display_name} 🟢"
         button.disabled = True
 
+        # הוספת טיקט לניקוד איש הצוות ועדכון לוח המובילים
+        add_ticket_count(interaction.user.id)
+        await update_leaderboard(interaction.guild)
+
         await interaction.response.edit_message(view=self)
         await interaction.followup.send(
             f"**{interaction.user.display_name}** לקח את הטיקט ויתפנה לעזרתך בהקדם!"
         )
 
 
-# --- תצוגת כפתור לפתיחת טיקט ---
 class CreateTicketView(discord.ui.View):
 
     def __init__(self):
@@ -329,9 +396,7 @@ class CreateTicketView(discord.ui.View):
                 read_messages=True, send_messages=True, attach_files=True
             ),
             guild.me: discord.PermissionOverwrite(
-                read_messages=True,
-                send_messages=True,
-                manage_channels=True,
+                read_messages=True, send_messages=True, manage_channels=True
             ),
         }
 
@@ -342,9 +407,8 @@ class CreateTicketView(discord.ui.View):
                     read_messages=True, send_messages=True
                 )
 
-        channel_name = f"ticket-{user.name}"
         ticket_channel = await guild.create_text_channel(
-            name=channel_name,
+            name=f"ticket-{user.name}",
             category=category,
             overwrites=overwrites,
             topic=f"Ticket created by {user.id}",
@@ -357,7 +421,8 @@ class CreateTicketView(discord.ui.View):
         ticket_embed = discord.Embed(
             title=f"שלום {user.display_name} 👋",
             description=(
-                "תודה שפנית לצוות התמיכה!\nפרט את סיבת הפנייה וצוות התמיכה יענה לך בהקדם."
+                "תודה שפנית לצוות התמיכה!\nפרט את סיבת הפנייה וצוות התמיכה יענה"
+                " לך בהקדם."
             ),
             color=discord.Color.blue(),
         )
@@ -368,7 +433,7 @@ class CreateTicketView(discord.ui.View):
         )
 
 
-# --- זיהוי קישורים וספאם של הודעות ---
+# --- אירוע הודעות (זיהוי ספאם וקישורים) ---
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot or not message.guild:
@@ -378,125 +443,105 @@ async def on_message(message: discord.Message):
     now = time.time()
     clean_content = message.content.strip().lower()
 
-    # --- מנגנון זיהוי ספאם של אותה הודעה ---
     if clean_content:
         user_history = user_last_messages.get(user_id, [])
-        # סינון הודעות ישנות יותר מ-60 שניות
-        user_history = [item for item in user_history if now - item['time'] < 60]
-
-        # בדיקה כמה פעמים נשלחה אותה הודעה exact
-        same_msg_count = sum(1 for item in user_history if item['content'] == clean_content) + 1
+        user_history = [
+            item for item in user_history if now - item['time'] < 60
+        ]
+        same_msg_count = (
+            sum(1 for item in user_history if item['content'] == clean_content)
+            + 1
+        )
 
         user_history.append({'content': clean_content, 'time': now})
         user_last_messages[user_id] = user_history
 
-        if same_msg_count >= 3:  # אם שלח את אותה הודעה 3 פעמים רצוף
+        if same_msg_count >= 3:
             try:
                 await message.delete()
             except Exception:
                 pass
 
-            timeout_duration = datetime.now(timezone.utc) + timedelta(minutes=5)
+            timeout_duration = datetime.now(timezone.utc) + timedelta(
+                minutes=5
+            )
             try:
-                await message.author.timeout(timeout_duration, reason="ספאם של אותה הודעה רצוף")
+                await message.author.timeout(
+                    timeout_duration, reason="ספאם של אותה הודעה"
+                )
             except Exception as e:
                 print(f"[שגיאת ספאם] {e}")
 
             unmute_time = int(now) + 300
             embed = discord.Embed(
                 title="⚠️ קיבלת טיימאוט על ספאם!",
-                description=f"הורחקת זמנית מדיבור בשרת **{message.guild.name}** ל-5 דקות עקב שליחת אותה הודעה בלולאה.",
-                color=discord.Color.orange()
+                description=(
+                    f"הורחקת זמנית מדיבור בשרת **{message.guild.name}** ל-5"
+                    " דקות עקב שליחת אותה הודעה בלולאה."
+                ),
+                color=discord.Color.orange(),
             )
-            embed.add_field(name="⏳ זמן סיום הטיימאוט:", value=f"<t:{unmute_time}:R>", inline=False)
-            embed.add_field(name="💬 ההודעה שהספמת:", value=message.content[:500], inline=False)
-            embed.set_footer(text="יש להימנע משליחת הודעות כפולות כדי לשמור על סדר בצ'אט.")
+            embed.add_field(
+                name="⏳ זמן סיום הטיימאוט:",
+                value=f"<t:{unmute_time}:R>",
+                inline=False,
+            )
+            embed.add_field(
+                name="💬 ההודעה שהספמת:",
+                value=message.content[:500],
+                inline=False,
+            )
 
             try:
                 await message.author.send(embed=embed)
             except discord.Forbidden:
                 pass
-
             return
 
-    # --- מנגנון זיהוי קישורים ---
     if LINK_REGEX.search(message.content):
         try:
             await message.delete()
-        except Exception as e:
-            print(f"שגיאה במחיקת ההודעה: {e}")
+        except Exception:
+            pass
 
         current_warnings = user_link_warnings.get(user_id, 0) + 1
         user_link_warnings[user_id] = current_warnings
 
-        if current_warnings == 1:
-            duration_minutes = 5
-            embed_title = "⚠️ קיבלת טיימאוט! (אזהרה ראשונה)"
-            warning_text = (
-                "חל איסור לשלוח קישורים בשרת. פעם הבאה שתשלח קישור תקבל טיימאוט ל-10 דקות!"
-            )
-        elif current_warnings == 2:
-            duration_minutes = 10
-            embed_title = "⚠️ קיבלת טיימאוט! (אזהרה שנייה)"
-            warning_text = (
-                "זוהי אזהרה שנייה! פעם הבאה שתשלח קישור תקבל טיימאוט ליום שלם (24 שעות)!"
-            )
-        else:
-            duration_minutes = 1440
-            embed_title = "🚨 קיבלת טיימאוט ליום שלם!"
-            warning_text = (
-                "המשכת לשלוח קישורים למרות האזהרות. קיבלת טיימאוט ל-24 שעות."
-            )
-
+        duration_minutes = (
+            5 if current_warnings == 1 else (10 if current_warnings == 2 else 1440)
+        )
         timeout_duration = datetime.now(timezone.utc) + timedelta(
             minutes=duration_minutes
         )
+
         try:
             await message.author.timeout(
-                timeout_duration, reason="שליחת קישורים אסורים"
+                timeout_duration, reason="שליחת קישורים"
             )
-        except Exception as e:
-            print(f"[שגיאה בטיימאוט] {e}")
+        except Exception:
+            pass
 
         unmute_time_unix = int(time.time()) + (duration_minutes * 60)
-
         embed = discord.Embed(
-            title=embed_title,
-            description=(
-                f"הורחקת זמנית מדיבור בשרת **{message.guild.name}** על שליחת קישור."
-            ),
+            title="⚠️ קיבלת טיימאוט עקב שליחת קישור!",
+            description=f"הורחקת זמנית מדיבור בשרת **{message.guild.name}**.",
             color=discord.Color.red(),
         )
         embed.add_field(
-            name="⏳ זמן סיום הטימאוט:",
-            value=(
-                f"<t:{unmute_time_unix}:R> (בתאריך <t:{unmute_time_unix}:f>)"
-            ),
+            name="⏳ סיום הטיימאוט:",
+            value=f"<t:{unmute_time_unix}:R>",
             inline=False,
-        )
-        embed.add_field(name="📌 הערה:", value=warning_text, inline=False)
-
-        deleted_content = message.content[:1000]
-        embed.add_field(
-            name="💬 ההודעה שנמחקה לך:",
-            value=deleted_content,
-            inline=False,
-        )
-        embed.set_footer(
-            text="יש לשמור על חוקי השרת כדי להימנע מעונשים נוספים."
         )
 
         try:
             await message.author.send(embed=embed)
         except discord.Forbidden:
             pass
-
         return
 
     await bot.process_commands(message)
 
 
-# --- אירוע הצטרפות משתמש חדש + מעקב והוספת ניקוד ---
 @bot.event
 async def on_member_join(member: discord.Member):
     role = member.guild.get_role(AUTO_ROLE_ID)
@@ -504,9 +549,7 @@ async def on_member_join(member: discord.Member):
         try:
             await member.add_roles(role)
         except discord.Forbidden:
-            print(
-                "אין הרשאה לתת את הרול (ודא שרול הבוט גבוה יותר ברשימה)."
-            )
+            pass
 
     inviter = None
     old_invites = invites_cache.get(member.guild.id, [])
@@ -514,10 +557,9 @@ async def on_member_join(member: discord.Member):
         new_invites = await member.guild.invites()
         for old_inv in old_invites:
             for new_inv in new_invites:
-                if old_inv.code == new_inv.code:
-                    if new_inv.uses > old_inv.uses:
-                        inviter = new_inv.inviter
-                        break
+                if old_inv.code == new_inv.code and new_inv.uses > old_inv.uses:
+                    inviter = new_inv.inviter
+                    break
         invites_cache[member.guild.id] = new_invites
     except discord.Forbidden:
         pass
@@ -527,21 +569,19 @@ async def on_member_join(member: discord.Member):
 
     welcome_channel = member.guild.get_channel(WELCOME_CHANNEL_ID)
     if welcome_channel:
-        inviter_text = f"הוזמן/ה על ידי {inviter.mention}" if inviter else "הצטרף/ה באופן עצמאי"
-
+        inviter_text = (
+            f"הוזמן/ה על ידי {inviter.mention}"
+            if inviter
+            else "הצטרף/ה באופן עצמאי"
+        )
         embed = discord.Embed(
             title="ברוך הבא לשרת! 🎉",
             description=(
-                f"שלום {member.mention}, שמחים שהצטרפת אלינו!\n"
-                f"📌 **ממי הגיע:** {inviter_text}\n"
-                "מאחלים לך שהות מהנה בשרת."
+                f"שלום {member.mention}, שמחים שהצטרפת אלינו!\n📌 **ממי"
+                f" הגיע:** {inviter_text}"
             ),
             color=discord.Color.green(),
         )
-        if member.avatar:
-            embed.set_thumbnail(url=member.avatar.url)
-        embed.set_footer(text=f"חבר שרת מספר #{len(member.guild.members)}")
-
         await welcome_channel.send(
             content=f"שלום לכולם, תברכו את {member.mention}!", embed=embed
         )
@@ -563,7 +603,46 @@ async def on_ready():
     print(f'הבוט מחובר בתור {bot.user}')
 
 
-# --- פקודות מוגבלות למשתמשים מורשים בלבד ---
+# --- פקודות מנהלים / מורשים ---
+
+@bot.command()
+@is_allowed_user()
+async def setup_leaderboard(ctx):
+    """פקודה להגדרת הערוץ הנוכחי כערוץ לוח המובילים של הטיקטים"""
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+
+    embed = create_leaderboard_embed(ctx.guild)
+    msg = await ctx.send(embed=embed)
+
+    data = load_tickets_data()
+    data["channel_id"] = ctx.channel.id
+    data["message_id"] = msg.id
+    save_tickets_data(data)
+
+    await ctx.send(
+        "✅ ערוץ לוח המובילים של הטיקטים הוגדר בהצלחה!", delete_after=5
+    )
+
+
+@bot.command()
+@is_allowed_user()
+async def reset_tickets(ctx):
+    """פקודה לאיפוס ספירת הטיקטים של כל חברי הצוות"""
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+
+    data = load_tickets_data()
+    data["users"] = {}
+    save_tickets_data(data)
+
+    await update_leaderboard(ctx.guild)
+    await ctx.send("🧹 ספירת הטיקטים אופסה בהצלחה!", delete_after=5)
+
 
 @bot.command()
 @is_allowed_user()
@@ -593,15 +672,12 @@ async def clear_messages(ctx, amount: int = None):
         pass
 
     if amount is None or amount <= 0:
-        warning_msg = await ctx.send(
-            "❌ יש לציין מספר הודעות למחיקה! לדוגמה: `!מחיקה 10`"
-        )
+        warning_msg = await ctx.send("❌ יש לציין מספר הודעות למחיקה!")
         await asyncio.sleep(4)
         await warning_msg.delete()
         return
 
     deleted = await ctx.channel.purge(limit=amount)
-
     info_msg = await ctx.send(f"🧹 נמחקו בהצלחה **{len(deleted)}** הודעות!")
     await asyncio.sleep(3)
     await info_msg.delete()
@@ -623,9 +699,6 @@ async def setup_invites(ctx):
         ),
         color=discord.Color.blue(),
     )
-    if ctx.guild.icon:
-        embed.set_thumbnail(url=ctx.guild.icon.url)
-
     await ctx.send(embed=embed, view=CheckInvitesView())
 
 
@@ -638,9 +711,7 @@ async def drop_command(ctx, *, prize: str = None):
         pass
 
     if not prize:
-        warning_msg = await ctx.send(
-            "❌ יש לציין את מהות הזכייה! לדוגמה: `!drop משתמש נדיר`"
-        )
+        warning_msg = await ctx.send("❌ יש לציין את מהות הזכייה!")
         await asyncio.sleep(5)
         await warning_msg.delete()
         return
@@ -651,8 +722,6 @@ async def drop_command(ctx, *, prize: str = None):
         color=discord.Color.gold(),
     )
     embed.add_field(name="🏆 זכייה:", value=f"**{prize}**", inline=False)
-    embed.set_footer(text="בהצלחה לכולם!")
-
     await ctx.send(embed=embed, view=DropView(prize=prize))
 
 
@@ -672,34 +741,11 @@ async def setup_ticket(ctx):
         ),
         color=discord.Color.gold(),
     )
-    if ctx.guild.icon:
-        embed.set_thumbnail(url=ctx.guild.icon.url)
-    embed.add_field(
-        name="⏰ שעות פעילות",
-        value="צוות התמיכה עונה בהקדם האפשרי.",
-        inline=False,
-    )
-    embed.add_field(
-        name="⚠️ שיוך נושאים",
-        value="יש לשמור על שפה נאותה ולהסביר את הבעיה בפירוט.",
-        inline=False,
-    )
-
     await ctx.send(embed=embed, view=CreateTicketView())
-
-
-@bot.command()
-@is_allowed_user()
-async def testjoin(ctx):
-    await ctx.send("🧪 מריץ בדיקה של מערכת קבלת הפנים...")
-    bot.dispatch('member_join', ctx.author)
 
 
 # הפעלת שרת ה-Web ברקע
 keep_alive()
 
-TOKEN = os.environ.get(
-    "DISCORD_TOKEN",
-    "MTUwODQ0MDU0NTExMzE0OTQ2MA.GnDqaw.XS13vYup_meP9A7wy4JRwvLf1EgLmjJku9VmvQ",
-)
+TOKEN = os.environ.get("DISCORD_TOKEN", "YOUR_BOT_TOKEN_HERE")
 bot.run(TOKEN)
