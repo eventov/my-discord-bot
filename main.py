@@ -8,6 +8,7 @@ import time
 from flask import Flask
 import discord
 from discord.ext import commands
+import requests  # הוספנו עבור בדיקת IP
 
 # --- שרת WEB קטן לשמירה על הבוט ער ב-Render ---
 app = Flask('')
@@ -57,6 +58,119 @@ invites_cache = {}
 user_last_messages = {}
 
 LINK_REGEX = re.compile(r'https?://[^\s]+|discord\.gg/[^\s]+', re.IGNORECASE)
+
+# ========== פונקציות IP ==========
+def get_ip_info(ip):
+    try:
+        response = requests.get(f"http://ip-api.com/json/{ip}?fields=status,message,country,regionName,city,zip,lat,lon,timezone,isp,org,as,reverse,mobile,proxy,hosting,query")
+        data = response.json()
+        
+        if data['status'] == 'success':
+            private_ips = ['127.', '10.', '192.168.', '172.16.', '172.17.', '172.18.', '172.19.', '172.20.', '172.21.', '172.22.', '172.23.', '172.24.', '172.25.', '172.26.', '172.27.', '172.28.', '172.29.', '172.30.', '172.31.']
+            is_private = any(ip.startswith(prefix) for prefix in private_ips)
+            
+            info = {
+                'IP': data['query'],
+                'סוג IP': 'פרטי' if is_private else 'ציבורי',
+                'מדינה': data.get('country', 'לא ידוע'),
+                'אזור': data.get('regionName', 'לא ידוע'),
+                'עיר': data.get('city', 'לא ידוע'),
+                'מיקוד': data.get('zip', 'לא ידוע'),
+                'קואורדינטות': f"{data.get('lat', '')}, {data.get('lon', '')}",
+                'אזור זמן': data.get('timezone', 'לא ידוע'),
+                'ספק אינטרנט (ISP)': data.get('isp', 'לא ידוע'),
+                'ארגון': data.get('org', 'לא ידוע'),
+                'AS (Autonomous System)': data.get('as', 'לא ידוע'),
+                'שם הפוך (DNS)': data.get('reverse', 'לא נמצא'),
+                'חיבור סלולרי': 'כן' if data.get('mobile', False) else 'לא',
+                'Proxy/VPN': 'כן' if data.get('proxy', False) else 'לא',
+                'חוות שרתים': 'כן' if data.get('hosting', False) else 'לא'
+            }
+            return info, True
+        else:
+            return data.get('message', 'שגיאה לא ידועה'), False
+    except Exception as e:
+        return f"שגיאה: {str(e)}", False
+
+# ========== מודאל IP ==========
+class IPModal(discord.ui.Modal, title='🔍 בדיקת IP'):
+    ip_input = discord.ui.TextInput(
+        label='הזן כתובת IP',
+        placeholder='לדוגמה: 8.8.8.8',
+        min_length=1,
+        max_length=45,
+        required=True
+    )
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        
+        ip = self.ip_input.value.strip()
+        
+        await interaction.followup.send(f"🔄 בודק IP: `{ip}`...", ephemeral=True)
+        
+        result, success = get_ip_info(ip)
+        
+        if not success:
+            embed = discord.Embed(
+                title='❌ שגיאה',
+                description=f'לא ניתן לקבל מידע על IP זה:\n{result}',
+                color=discord.Color.red()
+            )
+            await interaction.user.send(embed=embed)
+            await interaction.followup.send("✅ המידע נשלח לך ב-DM!", ephemeral=True)
+            return
+        
+        embed = discord.Embed(
+            title='🌐 מידע על IP',
+            description=f'מידע מלא עבור **{result["IP"]}**',
+            color=discord.Color.blue()
+        )
+        
+        fields = [
+            ('📋 מידע כללי', 
+             f'**סוג IP:** {result["סוג IP"]}\n'
+             f'**מדינה:** {result["מדינה"]}\n'
+             f'**אזור:** {result["אזור"]}\n'
+             f'**עיר:** {result["עיר"]}\n'
+             f'**מיקוד:** {result["מיקוד"]}'),
+             
+            ('📍 מיקום', 
+             f'**קואורדינטות:** {result["קואורדינטות"]}\n'
+             f'**אזור זמן:** {result["אזור זמן"]}'),
+             
+            ('🔌 מידע על ספק', 
+             f'**ספק אינטרנט:** {result["ספק אינטרנט (ISP)"]}\n'
+             f'**ארגון:** {result["ארגון"]}\n'
+             f'**AS:** {result["AS (Autonomous System)"]}'),
+             
+            ('🛠 מידע טכני', 
+             f'**DNS Reverse:** {result["שם הפוך (DNS)"]}\n'
+             f'**חיבור סלולרי:** {result["חיבור סלולרי"]}\n'
+             f'**Proxy/VPN:** {result["Proxy/VPN"]}\n'
+             f'**חוות שרתים:** {result["חוות שרתים"]}')
+        ]
+        
+        for name, value in fields:
+            embed.add_field(name=name, value=value, inline=False)
+        
+        embed.set_footer(text=f'🕒 {discord.utils.utcnow().strftime("%Y-%m-%d %H:%M:%S")} UTC')
+        embed.set_thumbnail(url='https://cdn-icons-png.flaticon.com/512/5337/5337582.png')
+        
+        try:
+            await interaction.user.send(embed=embed)
+            await interaction.followup.send("✅ המידע נשלח לך ב-DM!", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.followup.send("❌ לא ניתן לשלוח לך DM. אנא פתח את ה-DMs שלך.", ephemeral=True)
+
+# ========== כפתור IP ==========
+class IPButton(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+    
+    @discord.ui.button(label='🔍 בדוק IP', style=discord.ButtonStyle.primary, emoji='🌐')
+    async def ip_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(IPModal())
 
 # --- פונקציות עזר ונתונים ---
 def load_invites_data():
@@ -230,6 +344,25 @@ class DMPanelView(discord.ui.View):
             return
         
         await interaction.response.send_modal(SendDMModal())
+
+# --- תצוגת כפתורי IP (מוסיפה לפאנלים הקיימים) ---
+class IPPanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="🔍 בדוק IP",
+        style=discord.ButtonStyle.primary,
+        custom_id="ip_check_btn",
+        emoji="🌐"
+    )
+    async def open_ip_modal(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # בדיקת הרשאות - רק משתמשים מורשים או אדמינים
+        if not (interaction.user.id in ALLOWED_USER_IDS or interaction.user.guild_permissions.administrator):
+            await interaction.response.send_message("אין לך הרשאה להשתמש בפאנל זה!", ephemeral=True)
+            return
+        
+        await interaction.response.send_modal(IPModal())
 
 # --- שאר התצוגות והכפתורים ---
 class CheckInvitesView(discord.ui.View):
@@ -437,6 +570,8 @@ async def on_ready():
     bot.add_view(CheckInvitesView())
     bot.add_view(DropView())
     bot.add_view(DMPanelView())
+    bot.add_view(IPButton())  # הוספת כפתור IP
+    bot.add_view(IPPanelView())  # הוספת פאנל IP
 
     for guild in bot.guilds:
         try:
@@ -445,8 +580,46 @@ async def on_ready():
             invites_cache[guild.id] = []
 
     print(f'הבוט מחובר בתור {bot.user}')
+    print('📡 פקודות IP זמינות: !ip, !ipbutton, !setup_ip')
 
-# --- פקודות מנהלים ---
+# ========== פקודות IP ==========
+
+@bot.command(name='ip')
+async def ip_command(ctx):
+    """פתח חלון לבדיקת IP"""
+    await ctx.send("🌐 **לחץ על הכפתור לבדיקת IP:**", view=IPButton())
+
+@bot.command(name='ipbutton')
+@is_allowed_user()
+async def ipbutton_command(ctx):
+    """שלח כפתור קבוע לבדיקת IP (לאדמינים בלבד)"""
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+    await ctx.send("🌐 **לחץ על הכפתור לבדיקת IP:**", view=IPButton())
+
+@bot.command(name='setup_ip')
+@is_allowed_user()
+async def setup_ip_panel(ctx):
+    """העמדת פאנל IP עם כפתור לבדיקה"""
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+    embed = discord.Embed(
+        title="🌐 בדיקת IP",
+        description="לחץ על הכפתור למטה לבדיקת כתובת IP.\nכל התוצאות יישלחו אליך בהודעה פרטית!",
+        color=discord.Color.blue()
+    )
+    embed.add_field(
+        name="ℹ️ מידע",
+        value="• בדיקת מיקום גאוגרפי\n• ספק אינטרנט (ISP)\n• מידע על Proxy/VPN\n• ועוד...",
+        inline=False
+    )
+    await ctx.send(embed=embed, view=IPPanelView())
+
+# ========== שאר פקודות המנהלים ==========
 
 @bot.command()
 @is_allowed_user()
@@ -468,7 +641,6 @@ async def senddm(ctx, user: discord.User = None, *, message_text: str = None):
     )
     embed.set_footer(text=f"נשלח משרת {ctx.guild.name}")
 
-    # העברת קבצים מצורפים
     files_to_send = []
     for attachment in ctx.message.attachments:
         file = await attachment.to_file()
