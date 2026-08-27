@@ -460,6 +460,25 @@ async def on_ready():
     print(f'הבוט מחובר בתור {bot.user}')
 
 
+# --- פקודת מחיקת הודעות (!מחיקה / !clear) ---
+@bot.command(name="מחיקה", aliases=["clear", "purge"])
+@commands.has_permissions(manage_messages=True)
+async def clear_messages(ctx, amount: int = None):
+    await ctx.message.delete()
+
+    if amount is None or amount <= 0:
+        warning_msg = await ctx.send("❌ יש לציין מספר הודעות למחיקה! לדוגמה: `!מחיקה 10`")
+        await asyncio.sleep(4)
+        await warning_msg.delete()
+        return
+
+    deleted = await ctx.channel.purge(limit=amount)
+
+    info_msg = await ctx.send(f"🧹 נמחקו בהצלחה **{len(deleted)}** הודעות!")
+    await asyncio.sleep(3)
+    await info_msg.delete()
+
+
 # --- פקודת פאנל בדיקת הזמנות ---
 @bot.command()
 @commands.has_permissions(administrator=True)
