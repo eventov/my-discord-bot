@@ -193,4 +193,76 @@ async def on_message(message: discord.Message):
         embed.add_field(name="📌 הערה:", value=warning_text, inline=False)
         
         deleted_content = message.content[:1000]
-      formatted_code = "```\n" + deleted_content + "\n```"
+        embed.add_field(
+            name="💬 ההודעה שנמחקה לך:", 
+            value=deleted_content, 
+            inline=False
+        )
+        embed.set_footer(text="יש לשמור על חוקי השרת כדי להימנע מעונשים נוספים.")
+
+        try:
+            await message.author.send(embed=embed)
+            print(f"נשלחה הודעה פרטית ל-{message.author.name}")
+        except discord.Forbidden:
+            print(f"לא ניתן לשלוח הודעה פרטית ל-{message.author.name} (הודעות פרטיות חסומות).")
+
+        return
+
+    await bot.process_commands(message)
+
+# --- אירוע הצטרפות משתמש חדש ---
+@bot.event
+async def on_member_join(member: discord.Member):
+    role = member.guild.get_role(AUTO_ROLE_ID)
+    if role:
+        try:
+            await member.add_roles(role)
+        except discord.Forbidden:
+            print("אין הרשאה לתת את הרול (ודא שרול הבוט גבוה יותר ברשימה).")
+
+    welcome_channel = member.guild.get_channel(WELCOME_CHANNEL_ID)
+    if welcome_channel:
+        embed = discord.Embed(
+            title="ברוך הבא לשרת! 🎉",
+            description=f"שלום {member.mention}, שמחים שהצטרפת אלינו!\nמאחלים לך שהות מהנה בשרת.",
+            color=discord.Color.green()
+        )
+        if member.avatar:
+            embed.set_thumbnail(url=member.avatar.url)
+        embed.set_footer(text=f"חבר שרת מספר #{len(member.guild.members)}")
+        
+        await welcome_channel.send(content=f"שלום לכולם, תברכו את {member.mention}!", embed=embed)
+
+@bot.event
+async def on_ready():
+    bot.add_view(CreateTicketView())
+    bot.add_view(TicketControlView())
+    print(f'הבוט מחובר בתור {bot.user}')
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def setup_ticket(ctx):
+    await ctx.message.delete()
+    
+    embed = discord.Embed(
+        title="🎫 מערכת תמיכה ופניות",
+        description="זקוק לעזרה? רוצה לפתוח פנייה לצוות השרת?\nלחץ על הכפתור למטה כדי לפתוח טיקט פרטי!",
+        color=discord.Color.gold()
+    )
+    if ctx.guild.icon:
+        embed.set_thumbnail(url=ctx.guild.icon.url)
+    embed.add_field(name="⏰ שעות פעילות", value="צוות התמיכה עונה בהקדם האפשרי.", inline=False)
+    embed.add_field(name="⚠️ שיוך נושאים", value="יש לשמור על שפה נאותה ולהסביר את הבעיה בפירוט.", inline=False)
+    
+    await ctx.send(embed=embed, view=CreateTicketView())
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def testjoin(ctx):
+    await ctx.send("🧪 מריץ בדיקה של מערכת קבלת הפנים...")
+    bot.dispatch('member_join', ctx.author)
+
+# הפעלת שרת ה-Web ברקע
+keep_alive()
+
+bot.run('MTUwODQ0MDU0NTExMzE0OTQ2MA.GnDqaw.XS13vYup_meP9A7wy4JRwvLf1EgLmjJku9VmvQ')
