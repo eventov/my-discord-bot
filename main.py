@@ -42,7 +42,7 @@ AUTO_ROLE_ID = 1540365463706669136
 ALLOWED_USER_IDS = [
     1228062821690904748,  # ה-ID שלך
     1519071293519953974,  # ID חבר 1
-    1359539374496284917,  # ID חבר 2
+    0000000000000000000,  # ID חבר 2
     000000000000000000,  # ID חבר 3
     000000000000000000,  # ID חבר 4
 ]
@@ -102,7 +102,7 @@ def is_staff(user: discord.Member) -> bool:
     return any(role_id in user_role_ids for role_id in HELPER_ROLE_IDS)
 
 
-# בדיקת הרשאה לפקודות ניהול לפי ID מורשה
+# בדיקת הרשאה לפקודות ניהול (מוחקת את הודעת המשתמש הלא מורשה + שולחת הודעה בכחול)
 def is_allowed_user():
     async def predicate(ctx):
         if (
@@ -110,7 +110,18 @@ def is_allowed_user():
             or ctx.author.guild_permissions.administrator
         ):
             return True
-        msg = await ctx.send("❌ אין לך הרשאה להשתמש בפקודה זו!")
+
+        # מחיקת הודעת הניסיון של המשתמש הלא מורשה
+        try:
+            await ctx.message.delete()
+        except Exception:
+            pass
+
+        embed = discord.Embed(
+            description="מה אתה מנסה בכלל",
+            color=discord.Color.blue()
+        )
+        msg = await ctx.send(embed=embed)
         await asyncio.sleep(4)
         await msg.delete()
         return False
@@ -135,7 +146,6 @@ class CheckInvitesView(discord.ui.View):
         guild = interaction.guild
         user = interaction.user
 
-        # משיכת סך ההזמנות מתוך מסד הנתונים
         total_invites = get_invite_count(user.id)
 
         dm_embed = discord.Embed(
@@ -172,7 +182,7 @@ class CheckInvitesView(discord.ui.View):
 # --- תצוגת כפתור דרופ ---
 class DropView(discord.ui.View):
 
-    def __init__(self, prize: str):
+    def __init__(self, prize: str = ""):
         super().__init__(timeout=None)
         self.prize = prize
         self.claimed = False
@@ -473,7 +483,6 @@ async def on_member_join(member: discord.Member):
     except discord.Forbidden:
         pass
 
-    # במידה וזוהה מציע, מעדכן ומעלה לו את מספר ההזמנות במסד
     if inviter and not inviter.bot:
         add_invite_count(inviter.id)
 
@@ -504,6 +513,7 @@ async def on_ready():
     bot.add_view(CreateTicketView())
     bot.add_view(TicketControlView())
     bot.add_view(CheckInvitesView())
+    bot.add_view(DropView())
 
     for guild in bot.guilds:
         try:
@@ -516,10 +526,14 @@ async def on_ready():
 
 # --- פקודות מוגבלות למשתמשים מורשים בלבד ---
 
-# פקודה להגדרת/עדכון מספר ההזמנות של משתמש ידנית בצ'אט
 @bot.command()
 @is_allowed_user()
 async def setinvites(ctx, member: discord.Member = None, amount: int = None):
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+
     if not member or amount is None:
         await ctx.send("❌ שימוש שגוי! דוגמה: `!setinvites @user 5`", delete_after=5)
         return
@@ -534,7 +548,10 @@ async def setinvites(ctx, member: discord.Member = None, amount: int = None):
 @bot.command(name="מחיקה", aliases=["clear", "purge"])
 @is_allowed_user()
 async def clear_messages(ctx, amount: int = None):
-    await ctx.message.delete()
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
 
     if amount is None or amount <= 0:
         warning_msg = await ctx.send(
@@ -554,7 +571,10 @@ async def clear_messages(ctx, amount: int = None):
 @bot.command()
 @is_allowed_user()
 async def setup_invites(ctx):
-    await ctx.message.delete()
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
 
     embed = discord.Embed(
         title="📊 בדיקת הזמנות",
@@ -573,7 +593,10 @@ async def setup_invites(ctx):
 @bot.command(name="drop", aliases=["DROP"])
 @is_allowed_user()
 async def drop_command(ctx, *, prize: str = None):
-    await ctx.message.delete()
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
 
     if not prize:
         warning_msg = await ctx.send(
@@ -597,7 +620,10 @@ async def drop_command(ctx, *, prize: str = None):
 @bot.command()
 @is_allowed_user()
 async def setup_ticket(ctx):
-    await ctx.message.delete()
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
 
     embed = discord.Embed(
         title="🎫 מערכת תמיכה ופניות",
