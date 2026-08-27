@@ -57,6 +57,42 @@ def is_staff(user: discord.Member) -> bool:
     return any(role_id in user_role_ids for role_id in HELPER_ROLE_IDS)
 
 
+# --- תצוגת כפתור דרופ ---
+class DropView(discord.ui.View):
+
+    def __init__(self, prize: str):
+        super().__init__(timeout=None)
+        self.prize = prize
+        self.claimed = False
+
+    @discord.ui.button(
+        label="לקחת זכייה 🎁",
+        style=discord.ButtonStyle.blurple,
+        custom_id="claim_drop_btn",
+    )
+    async def claim_drop(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        if self.claimed:
+            await interaction.response.send_message(
+                "הדרופ הזה כבר נלקח!", ephemeral=True
+            )
+            return
+
+        self.claimed = True
+        button.style = discord.ButtonStyle.green
+        button.label = f"נלקח על ידי {interaction.user.display_name} 🎉"
+        button.disabled = True
+
+        await interaction.response.edit_message(view=self)
+
+        ticket_link = "https://discord.com/channels/1539658262046048349/1542157535514075328"
+        await interaction.followup.send(
+            f"🎉 {interaction.user.mention} זכית בדרופ!\n"
+            f"תפתח טיקט פה: {ticket_link}"
+        )
+
+
 # --- תצוגת הכפתורים בתוך הטיקט ---
 class TicketControlView(discord.ui.View):
 
@@ -344,6 +380,29 @@ async def on_ready():
     bot.add_view(CreateTicketView())
     bot.add_view(TicketControlView())
     print(f'הבוט מחובר בתור {bot.user}')
+
+
+# --- פקודת DROP ---
+@bot.command(name="drop", aliases=["DROP"])
+@commands.has_permissions(administrator=True)
+async def drop_command(ctx, *, prize: str = None):
+    await ctx.message.delete()
+
+    if not prize:
+        warning_msg = await ctx.send("❌ יש לציין את מהות הזכייה! לדוגמה: `!drop משתמש נדיר`")
+        await asyncio.sleep(5)
+        await warning_msg.delete()
+        return
+
+    embed = discord.Embed(
+        title="🎁 דרופ חדש בשרת!",
+        description="מי שלוחץ ראשון על הכפתור למטה זוכה בדרופ!",
+        color=discord.Color.gold(),
+    )
+    embed.add_field(name="🏆 זכייה:", value=f"**{prize}**", inline=False)
+    embed.set_footer(text="בהצלחה לכולם!")
+
+    await ctx.send(embed=embed, view=DropView(prize=prize))
 
 
 # פקודה רגילה בלבד (!setup_ticket)
