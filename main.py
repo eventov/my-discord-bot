@@ -193,6 +193,4 @@ async def on_message(message: discord.Message):
         embed.add_field(name="📌 הערה:", value=warning_text, inline=False)
         
         deleted_content = message.content[:1000]
-        embed.add_field(
-            name="💬 ההודעה שנמחקה לך:", 
-            value=f"```\n{deleted_content}\n
+        formatted_code = f"```\n{deleted_content}\n
