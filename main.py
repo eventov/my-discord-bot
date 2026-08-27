@@ -1,9 +1,28 @@
 import asyncio
 import time
 import re
+import os
+from threading import Thread
 from datetime import datetime, timedelta, timezone
+from flask import Flask
 import discord
 from discord.ext import commands
+
+# --- שרת WEB קטן כדי לתרצות את Render ---
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot is alive!"
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
+
+def keep_alive():
+    t = Thread(target=run_web_server)
+    t.daemon = True
+    t.start()
 
 # --- הגדרות מזהים (IDs) ---
 HELPER_ROLE_ID = 1508433031034179704  
@@ -128,13 +147,11 @@ async def on_message(message: discord.Message):
         return
 
     if LINK_REGEX.search(message.content):
-        # 1. מחיקת ההודעה
         try:
             await message.delete()
         except Exception as e:
             print(f"שגיאה במחיקת ההודעה: {e}")
 
-        # 2. חישוב אזהרות
         user_id = message.author.id
         current_warnings = user_link_warnings.get(user_id, 0) + 1
         user_link_warnings[user_id] = current_warnings
@@ -152,7 +169,6 @@ async def on_message(message: discord.Message):
             embed_title = "🚨 קיבלת טיימאוט ליום שלם!"
             warning_text = "המשכת לשלוח קישורים למרות האזהרות. קיבלת טיימאוט ל-24 שעות."
 
-        # 3. ביצוע הטיימאוט
         timeout_duration = datetime.now(timezone.utc) + timedelta(minutes=duration_minutes)
         try:
             await message.author.timeout(timeout_duration, reason="שליחת קישורים אסורים")
@@ -162,7 +178,6 @@ async def on_message(message: discord.Message):
         except Exception as e:
             print(f"[שגיאה בטיימאוט] {e}")
 
-        # 4. שליחת הודעה פרטית
         unmute_time_unix = int(time.time()) + (duration_minutes * 60)
         
         embed = discord.Embed(
@@ -180,71 +195,4 @@ async def on_message(message: discord.Message):
         deleted_content = message.content[:1000]
         embed.add_field(
             name="💬 ההודעה שנמחקה לך:", 
-            value=f"```\n{deleted_content}\n```", 
-            inline=False
-        )
-        embed.set_footer(text="יש לשמור על חוקי השרת כדי להימנע מעונשים נוספים.")
-
-        try:
-            await message.author.send(embed=embed)
-            print(f"נשלחה הודעה פרטית ל-{message.author.name}")
-        except discord.Forbidden:
-            print(f"לא ניתן לשלוח הודעה פרטית ל-{message.author.name} (הודעות פרטיות חסומות).")
-
-        return
-
-    await bot.process_commands(message)
-
-# --- אירוע הצטרפות משתמש חדש ---
-@bot.event
-async def on_member_join(member: discord.Member):
-    role = member.guild.get_role(AUTO_ROLE_ID)
-    if role:
-        try:
-            await member.add_roles(role)
-        except discord.Forbidden:
-            print("אין הרשאה לתת את הרול (ודא שרול הבוט גבוה יותר ברשימה).")
-
-    welcome_channel = member.guild.get_channel(WELCOME_CHANNEL_ID)
-    if welcome_channel:
-        embed = discord.Embed(
-            title="ברוך הבא לשרת! 🎉",
-            description=f"שלום {member.mention}, שמחים שהצטרפת אלינו!\nמאחלים לך שהות מהנה בשרת.",
-            color=discord.Color.green()
-        )
-        if member.avatar:
-            embed.set_thumbnail(url=member.avatar.url)
-        embed.set_footer(text=f"חבר שרת מספר #{len(member.guild.members)}")
-        
-        await welcome_channel.send(content=f"שלום לכולם, תברכו את {member.mention}!", embed=embed)
-
-@bot.event
-async def on_ready():
-    bot.add_view(CreateTicketView())
-    bot.add_view(TicketControlView())
-    print(f'הבוט מחובר בתור {bot.user}')
-
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def setup_ticket(ctx):
-    await ctx.message.delete()
-    
-    embed = discord.Embed(
-        title="🎫 מערכת תמיכה ופניות",
-        description="זקוק לעזרה? רוצה לפתוח פנייה לצוות השרת?\nלחץ על הכפתור למטה כדי לפתוח טיקט פרטי!",
-        color=discord.Color.gold()
-    )
-    if ctx.guild.icon:
-        embed.set_thumbnail(url=ctx.guild.icon.url)
-    embed.add_field(name="⏰ שעות פעילות", value="צוות התמיכה עונה בהקדם האפשרי.", inline=False)
-    embed.add_field(name="⚠️ שיוך נושאים", value="יש לשמור על שפה נאותה ולהסביר את הבעיה בפירוט.", inline=False)
-    
-    await ctx.send(embed=embed, view=CreateTicketView())
-
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def testjoin(ctx):
-    await ctx.send("🧪 מריץ בדיקה של מערכת קבלת הפנים...")
-    bot.dispatch('member_join', ctx.author)
-
-bot.run('MTUwODQ0MDU0NTExMzE0OTQ2MA.GnDqaw.XS13vYup_meP9A7wy4JRwvLf1EgLmjJku9VmvQ')
+            value=f"```\n{deleted_content}\n
