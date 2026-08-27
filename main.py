@@ -8,7 +8,7 @@ import time
 from flask import Flask
 import discord
 from discord.ext import commands
-import requests  # הוספנו עבור בדיקת IP
+import requests
 
 # --- שרת WEB קטן לשמירה על הבוט ער ב-Render ---
 app = Flask('')
@@ -33,6 +33,7 @@ HELPER_ROLE_IDS = [
 ]
 TICKET_CATEGORY_ID = 1542165598853922958
 WELCOME_CHANNEL_ID = 1542508702169571529
+REVIEWS_CHANNEL_ID = 1542508702169571529  # 👈 שים כאן את ה-ID של ערוץ הביקורות!
 AUTO_ROLE_ID = 1540365463706669136
 
 ALLOWED_USER_IDS = [
@@ -58,6 +59,98 @@ invites_cache = {}
 user_last_messages = {}
 
 LINK_REGEX = re.compile(r'https?://[^\s]+|discord\.gg/[^\s]+', re.IGNORECASE)
+
+# ========== מערכת ביקורות (REVIEWS SYSTEM) ==========
+
+class ReviewModal(discord.ui.Modal, title='✍️ כתיבת ביקורת'):
+    system_name = discord.ui.TextInput(
+        label='שם המערכת / השירות',
+        placeholder='לדוגמה: תמיכה טכנית, השרת באופן כללי, בוטים וכו...',
+        min_length=2,
+        max_length=50,
+        required=True
+    )
+    
+    rating = discord.ui.TextInput(
+        label='דירוג (בין 1 ל-5 כוכבים)',
+        placeholder='רשום מספר מ-1 עד 5',
+        min_length=1,
+        max_length=1,
+        required=True
+    )
+    
+    review_text = discord.ui.TextInput(
+        label='תוכן הביקורת',
+        style=discord.TextStyle.paragraph,
+        placeholder='תכתוב את כל מה שמי שתרצה על השרת והתמיכה שלנו...',
+        min_length=5,
+        max_length=1000,
+        required=True
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        # בדיקת תקינות הדירוג בכוכבים
+        stars_input = self.rating.value.strip()
+        if not stars_input.isdigit() or not (1 <= int(stars_input) <= 5):
+            await interaction.response.send_message("❌ נא להזין מספר תקין של כוכבים בין 1 ל-5!", ephemeral=True)
+            return
+
+        num_stars = int(stars_input)
+        stars_display = "⭐" * num_stars
+
+        # מציאת ערוץ הביקורות
+        reviews_channel = interaction.guild.get_channel(REVIEWS_CHANNEL_ID)
+        if not reviews_channel:
+            await interaction.response.send_message("❌ ערוץ הביקורות לא נמצא. אנא פנה להנהלה.", ephemeral=True)
+            return
+
+        # יצירת ה-Embed של הביקורת
+        embed = discord.Embed(
+            title=f"⭐ ביקורת חדשה: {self.system_name.value}",
+            color=discord.Color.gold(),
+            timestamp=discord.utils.utcnow()
+        )
+        embed.add_field(name="👤 נכתב על ידי:", value=interaction.user.mention, inline=True)
+        embed.add_field(name="⭐ דירוג:", value=f"{stars_display} ({num_stars}/5)", inline=True)
+        embed.add_field(name="📌 שם המערכת:", value=self.system_name.value, inline=False)
+        embed.add_field(name="📝 תיאור וחוות דעת:", value=self.review_text.value, inline=False)
+        embed.set_thumbnail(url=interaction.user.display_avatar.url)
+        embed.set_footer(text=f"שרת {interaction.guild.name}", icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
+
+        # שליחה לערוץ הביקורות
+        await reviews_channel.send(embed=embed)
+        await interaction.response.send_message("✅ תודה רבה! הביקורת שלך נשלחה בהצלחה.", ephemeral=True)
+
+
+class ReviewPanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="✍️ כתוב ביקורת",
+        style=discord.ButtonStyle.success,
+        custom_id="write_review_btn"
+    )
+    async def open_review_modal(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(ReviewModal())
+
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def setup_reviews(ctx):
+    """פקודה להעמדת פאנל כתיבת ביקורות"""
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+
+    embed = discord.Embed(
+        title="⭐ מערכת ביקורות וחוות דעת",
+        description="נשמח לשמוע את דעתך על השרת והתמיכה שלנו!\nלחץ על הכפתור למטה כדי לכתוב ביקורת.",
+        color=discord.Color.gold()
+    )
+    embed.set_footer(text="כל הביקורות עוזרות לנו להשתפר!")
+    await ctx.send(embed=embed, view=ReviewPanelView())
 
 # ========== פונקציות IP ==========
 def get_ip_info(ip):
@@ -287,7 +380,7 @@ def is_allowed_user():
         return False
     return commands.check(predicate)
 
-# --- Modal מעודכן (מאפשר לבקש להעלות קובץ מיד לאחר מכן) ---
+# --- Modal שליחת DM ---
 class SendDMModal(discord.ui.Modal, title="שליחת הודעה פרטית למשתמש"):
     user_id_input = discord.ui.TextInput(
         label="ID של המשתמש",
@@ -317,7 +410,6 @@ class SendDMModal(discord.ui.Modal, title="שליחת הודעה פרטית למ
 
         message_text = self.message_input.value or ""
 
-        # שליחת הודעה זמנית שמבקשת להעלות קובץ (אם רוצים)
         await interaction.response.send_message(
             "⏳ **רוצה לצרף קובץ/תמונה להודעה?**\n"
             "שלח עכשיו את הקובץ בצ'אט בתוך **30 שניות** (או כתוב `no` / חכה לסיום הזמן כדי לשלוח רק טקסט).",
@@ -336,7 +428,7 @@ class SendDMModal(discord.ui.Modal, title="שליחת הודעה פרטית למ
                     file = await attachment.to_file()
                     files_to_send.append(file)
                 try:
-                    await msg.delete() # מחיקת הקובץ מהצ'אט הציבורי למען הסדר
+                    await msg.delete()
                 except Exception:
                     pass
             elif msg.content.lower() == 'no':
@@ -345,7 +437,7 @@ class SendDMModal(discord.ui.Modal, title="שליחת הודעה פרטית למ
                 except Exception:
                     pass
         except asyncio.TimeoutError:
-            pass # אם עברו 30 שניות ולא נשלח קובץ, ממשיכים בשליחת הטקסט בלבד
+            pass
 
         if not message_text and not files_to_send:
             await interaction.followup.send("❌ לא הזנת טקסט ולא צירפת קובץ, השליחה בוטלה.", ephemeral=True)
@@ -364,7 +456,6 @@ class SendDMModal(discord.ui.Modal, title="שליחת הודעה פרטית למ
         except discord.Forbidden:
             await interaction.followup.send(f"❌ המשתמש {target_user.mention} סגר את ההודעות הפרטיות שלו.", ephemeral=True)
 
-# --- תצוגת הפאנל עם הכפתור לשליחת הודעה ---
 class DMPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -381,7 +472,6 @@ class DMPanelView(discord.ui.View):
         
         await interaction.response.send_modal(SendDMModal())
 
-# --- תצוגת כפתורי IP ---
 class IPPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -399,7 +489,6 @@ class IPPanelView(discord.ui.View):
         
         await interaction.response.send_modal(IPModal())
 
-# --- שאר התצוגות והכפתורים ---
 class CheckInvitesView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -607,6 +696,7 @@ async def on_ready():
     bot.add_view(DMPanelView())
     bot.add_view(IPButton())
     bot.add_view(IPPanelView())
+    bot.add_view(ReviewPanelView())  # ✨ הוספת תמיכה מתמשכת בכפתור הביקורות
 
     for guild in bot.guilds:
         try:
@@ -615,19 +705,16 @@ async def on_ready():
             invites_cache[guild.id] = []
 
     print(f'הבוט מחובר בתור {bot.user}')
-    print('📡 פקודות IP זמינות: !ip, !ipbutton, !setup_ip')
 
 # ========== פקודות IP ==========
 
 @bot.command(name='ip')
 async def ip_command(ctx):
-    """פתח חלון לבדיקת IP"""
     await ctx.send("🌐 **לחץ על הכפתור לבדיקת IP:**", view=IPButton())
 
 @bot.command(name='ipbutton')
 @is_allowed_user()
 async def ipbutton_command(ctx):
-    """שלח כפתור קבוע לבדיקת IP (לאדמינים בלבד)"""
     try:
         await ctx.message.delete()
     except Exception:
@@ -637,7 +724,6 @@ async def ipbutton_command(ctx):
 @bot.command(name='setup_ip')
 @is_allowed_user()
 async def setup_ip_panel(ctx):
-    """העמדת פאנל IP עם כפתור לבדיקה"""
     try:
         await ctx.message.delete()
     except Exception:
@@ -647,26 +733,20 @@ async def setup_ip_panel(ctx):
         description="לחץ על הכפתור למטה לבדיקת כתובת IP.\nכל התוצאות יישלחו אליך בהודעה פרטית!",
         color=discord.Color.blue()
     )
-    embed.add_field(
-        name="ℹ️ מידע",
-        value="• בדיקת מיקום גאוגרפי\n• ספק אינטרנט (ISP)\n• מידע על Proxy/VPN\n• ועוד...",
-        inline=False
-    )
     await ctx.send(embed=embed, view=IPPanelView())
 
-# ========== שאר פקודות המנהלים ==========
+# ========== פקודות מנהלים ==========
 
 @bot.command()
 @is_allowed_user()
 async def senddm(ctx, user: discord.User = None, *, message_text: str = None):
-    """פקודה לשליחת הודעה פרטית ישירה + אפשרות לצירוף קבצים"""
     try:
         await ctx.message.delete()
     except Exception:
         pass
 
     if not user or (not message_text and not ctx.message.attachments):
-        await ctx.send("❌ שימוש שגוי! דוגמה: `!senddm @user ההודעה שלך` (ניתן לצרף גם קבצים להודעה)", delete_after=6)
+        await ctx.send("❌ שימוש שגוי! דוגמה: `!senddm @user ההודעה שלך`", delete_after=6)
         return
 
     embed = discord.Embed(
@@ -690,7 +770,6 @@ async def senddm(ctx, user: discord.User = None, *, message_text: str = None):
 @bot.command()
 @is_allowed_user()
 async def setup_dmpanel(ctx):
-    """פקודה להעמדת פאנל שליחת הודעות פרטיות"""
     try:
         await ctx.message.delete()
     except Exception:
