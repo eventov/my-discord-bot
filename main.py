@@ -42,7 +42,7 @@ AUTO_ROLE_ID = 1540365463706669136
 ALLOWED_USER_IDS = [
     1228062821690904748,  # ה-ID שלך
     1519071293519953974,  # ID חבר 1
-    0000000000000000000,  # ID חבר 2
+    1359539374496284917,  # ID חבר 2
     000000000000000000,  # ID חבר 3
     000000000000000000,  # ID חבר 4
 ]
@@ -58,6 +58,7 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 user_cooldowns = {}
 user_link_warnings = {}
 invites_cache = {}
+user_last_messages = {}  # מעקב אחרי ספאם של הודעות זהות
 
 LINK_REGEX = re.compile(r'https?://[^\s]+|discord\.gg/[^\s]+', re.IGNORECASE)
 
@@ -102,7 +103,7 @@ def is_staff(user: discord.Member) -> bool:
     return any(role_id in user_role_ids for role_id in HELPER_ROLE_IDS)
 
 
-# בדיקת הרשאה לפקודות ניהול (מוחקת את הודעת המשתמש הלא מורשה + שולחת הודעה בכחול)
+# בדיקת הרשאה לפקודות ניהול (מוחקת הודעה ושולחת הודעה פרטית בכחול)
 def is_allowed_user():
     async def predicate(ctx):
         if (
@@ -117,13 +118,16 @@ def is_allowed_user():
         except Exception:
             pass
 
+        # שליחת הודעה פרטית למשתמש הלא מורשה בלבד
         embed = discord.Embed(
             description="מה אתה מנסה בכלל",
             color=discord.Color.blue()
         )
-        msg = await ctx.send(embed=embed)
-        await asyncio.sleep(4)
-        await msg.delete()
+        try:
+            await ctx.author.send(embed=embed)
+        except discord.Forbidden:
+            pass
+
         return False
 
     return commands.check(predicate)
@@ -364,19 +368,64 @@ class CreateTicketView(discord.ui.View):
         )
 
 
-# --- זיהוי קישורים ---
+# --- זיהוי קישורים וספאם של הודעות ---
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot or not message.guild:
         return
 
+    user_id = message.author.id
+    now = time.time()
+    clean_content = message.content.strip().lower()
+
+    # --- מנגנון זיהוי ספאם של אותה הודעה ---
+    if clean_content:
+        user_history = user_last_messages.get(user_id, [])
+        # סינון הודעות ישנות יותר מ-60 שניות
+        user_history = [item for item in user_history if now - item['time'] < 60]
+
+        # בדיקה כמה פעמים נשלחה אותה הודעה exact
+        same_msg_count = sum(1 for item in user_history if item['content'] == clean_content) + 1
+
+        user_history.append({'content': clean_content, 'time': now})
+        user_last_messages[user_id] = user_history
+
+        if same_msg_count >= 3:  # אם שלח את אותה הודעה 3 פעמים רצוף
+            try:
+                await message.delete()
+            except Exception:
+                pass
+
+            timeout_duration = datetime.now(timezone.utc) + timedelta(minutes=5)
+            try:
+                await message.author.timeout(timeout_duration, reason="ספאם של אותה הודעה רצוף")
+            except Exception as e:
+                print(f"[שגיאת ספאם] {e}")
+
+            unmute_time = int(now) + 300
+            embed = discord.Embed(
+                title="⚠️ קיבלת טיימאוט על ספאם!",
+                description=f"הורחקת זמנית מדיבור בשרת **{message.guild.name}** ל-5 דקות עקב שליחת אותה הודעה בלולאה.",
+                color=discord.Color.orange()
+            )
+            embed.add_field(name="⏳ זמן סיום הטיימאוט:", value=f"<t:{unmute_time}:R>", inline=False)
+            embed.add_field(name="💬 ההודעה שהספמת:", value=message.content[:500], inline=False)
+            embed.set_footer(text="יש להימנע משליחת הודעות כפולות כדי לשמור על סדר בצ'אט.")
+
+            try:
+                await message.author.send(embed=embed)
+            except discord.Forbidden:
+                pass
+
+            return
+
+    # --- מנגנון זיהוי קישורים ---
     if LINK_REGEX.search(message.content):
         try:
             await message.delete()
         except Exception as e:
             print(f"שגיאה במחיקת ההודעה: {e}")
 
-        user_id = message.author.id
         current_warnings = user_link_warnings.get(user_id, 0) + 1
         user_link_warnings[user_id] = current_warnings
 
@@ -405,13 +454,6 @@ async def on_message(message: discord.Message):
         try:
             await message.author.timeout(
                 timeout_duration, reason="שליחת קישורים אסורים"
-            )
-            print(
-                f"ניתן טיימאוט בהצלחה ל-{message.author.name} ל-{duration_minutes} דקות."
-            )
-        except discord.Forbidden:
-            print(
-                f"[שגיאה] לא ניתן לתת טיימאוט ל-{message.author.name} (משתמש אדמין או רול בוט נמוך)."
             )
         except Exception as e:
             print(f"[שגיאה בטיימאוט] {e}")
@@ -446,11 +488,8 @@ async def on_message(message: discord.Message):
 
         try:
             await message.author.send(embed=embed)
-            print(f"נשלחה הודעה פרטית ל-{message.author.name}")
         except discord.Forbidden:
-            print(
-                f"לא ניתן לשלוח הודעה פרטית ל-{message.author.name} (הודעות פרטיות חסומות)."
-            )
+            pass
 
         return
 
