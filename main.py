@@ -37,6 +37,15 @@ TICKET_CATEGORY_ID = 1542165598853922958
 WELCOME_CHANNEL_ID = 1542508702169571529
 AUTO_ROLE_ID = 1540365463706669136
 
+# רשימת המורשים: שים כאן את ה-ID שלך + 4 ה-IDs של החברים שלך
+ALLOWED_USER_IDS = [
+    1228062821690904748,  # ה-ID שלך
+    1519071293519953974,  # ID חבר 1
+    1359539374496284917,  # ID חבר 2
+    000000000000000000,  # ID חבר 3
+    000000000000000000,  # ID חבר 4
+]
+
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
@@ -45,8 +54,6 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 user_cooldowns = {}
 user_link_warnings = {}
-
-# זיכרון לשמירת ההזמנות של השרת
 invites_cache = {}
 
 LINK_REGEX = re.compile(r'https?://[^\s]+|discord\.gg/[^\s]+', re.IGNORECASE)
@@ -58,6 +65,22 @@ def is_staff(user: discord.Member) -> bool:
         return True
     user_role_ids = [r.id for r in user.roles]
     return any(role_id in user_role_ids for role_id in HELPER_ROLE_IDS)
+
+
+# בדיקת הרשאה לפקודות ניהול לפי ID מורשה
+def is_allowed_user():
+    async def predicate(ctx):
+        if (
+            ctx.author.id in ALLOWED_USER_IDS
+            or ctx.author.guild_permissions.administrator
+        ):
+            return True
+        msg = await ctx.send("❌ אין לך הרשאה להשתמש בפקודה זו!")
+        await asyncio.sleep(4)
+        await msg.delete()
+        return False
+
+    return commands.check(predicate)
 
 
 # --- תצוגת כפתור בדיקת הזמנות ---
@@ -407,7 +430,6 @@ async def on_member_join(member: discord.Member):
                 "אין הרשאה לתת את הרול (ודא שרול הבוט גבוה יותר ברשימה)."
             )
 
-    # מציאת המזמין
     inviter = None
     old_invites = invites_cache.get(member.guild.id, [])
     try:
@@ -450,7 +472,6 @@ async def on_ready():
     bot.add_view(TicketControlView())
     bot.add_view(CheckInvitesView())
 
-    # טעינת ההזמנות לזיכרון עבור מעקב הצטרפות
     for guild in bot.guilds:
         try:
             invites_cache[guild.id] = await guild.invites()
@@ -460,14 +481,18 @@ async def on_ready():
     print(f'הבוט מחובר בתור {bot.user}')
 
 
-# --- פקודת מחיקת הודעות (!מחיקה / !clear) ---
+# --- פקודות מוגבלות למשתמשים מורשים בלבד ---
+
+
 @bot.command(name="מחיקה", aliases=["clear", "purge"])
-@commands.has_permissions(manage_messages=True)
+@is_allowed_user()
 async def clear_messages(ctx, amount: int = None):
     await ctx.message.delete()
 
     if amount is None or amount <= 0:
-        warning_msg = await ctx.send("❌ יש לציין מספר הודעות למחיקה! לדוגמה: `!מחיקה 10`")
+        warning_msg = await ctx.send(
+            "❌ יש לציין מספר הודעות למחיקה! לדוגמה: `!מחיקה 10`"
+        )
         await asyncio.sleep(4)
         await warning_msg.delete()
         return
@@ -479,15 +504,17 @@ async def clear_messages(ctx, amount: int = None):
     await info_msg.delete()
 
 
-# --- פקודת פאנל בדיקת הזמנות ---
 @bot.command()
-@commands.has_permissions(administrator=True)
+@is_allowed_user()
 async def setup_invites(ctx):
     await ctx.message.delete()
 
     embed = discord.Embed(
         title="📊 בדיקת הזמנות",
-        description="רוצה לדעת כמה חברים הזמנת לשרת?\nלחץ על הכפתור למטה והבוט ישלח לך את הנתונים בפרטי!",
+        description=(
+            "רוצה לדעת כמה חברים הזמנת לשרת?\nלחץ על הכפתור למטה והבוט ישלח"
+            " לך את הנתונים בפרטי!"
+        ),
         color=discord.Color.blue(),
     )
     if ctx.guild.icon:
@@ -496,14 +523,15 @@ async def setup_invites(ctx):
     await ctx.send(embed=embed, view=CheckInvitesView())
 
 
-# --- פקודת DROP ---
 @bot.command(name="drop", aliases=["DROP"])
-@commands.has_permissions(administrator=True)
+@is_allowed_user()
 async def drop_command(ctx, *, prize: str = None):
     await ctx.message.delete()
 
     if not prize:
-        warning_msg = await ctx.send("❌ יש לציין את מהות הזכייה! לדוגמה: `!drop משתמש נדיר`")
+        warning_msg = await ctx.send(
+            "❌ יש לציין את מהות הזכייה! לדוגמה: `!drop משתמש נדיר`"
+        )
         await asyncio.sleep(5)
         await warning_msg.delete()
         return
@@ -519,16 +547,16 @@ async def drop_command(ctx, *, prize: str = None):
     await ctx.send(embed=embed, view=DropView(prize=prize))
 
 
-# פקודה רגילה בלבד (!setup_ticket)
 @bot.command()
-@commands.has_permissions(administrator=True)
+@is_allowed_user()
 async def setup_ticket(ctx):
     await ctx.message.delete()
 
     embed = discord.Embed(
         title="🎫 מערכת תמיכה ופניות",
         description=(
-            "זקוק לעזרה? רוצה לפתוח פנייה לצוות השרת?\nלחץ על הכפתור למטה כדי לפתוח טיקט פרטי!"
+            "זקוק לעזרה? רוצה לפתוח פנייה לצוות השרת?\nלחץ על הכפתור למטה כדי"
+            " לפתוח טיקט פרטי!"
         ),
         color=discord.Color.gold(),
     )
@@ -549,7 +577,7 @@ async def setup_ticket(ctx):
 
 
 @bot.command()
-@commands.has_permissions(administrator=True)
+@is_allowed_user()
 async def testjoin(ctx):
     await ctx.send("🧪 מריץ בדיקה של מערכת קבלת הפנים...")
     bot.dispatch('member_join', ctx.author)
