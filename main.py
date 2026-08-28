@@ -747,7 +747,7 @@ async def on_member_remove(member: discord.Member):
     except Exception:
         pass
 
-# ========== אירוע להתחברות הבוט (מוגן משגיאות) ==========
+# ========== אירוע להתחברות הבוט (מתוקן) ==========
 @bot.event
 async def on_ready():
     bot.add_view(CreateTicketView())
@@ -758,13 +758,6 @@ async def on_ready():
     bot.add_view(IPButton())
     bot.add_view(IPPanelView())
     bot.add_view(ReviewPanelView())
-
-    for guild in bot.guilds:
-        try:
-            invites_cache[guild.id] = await guild.invites()
-        except Exception as e:
-            print(f"Invite warning for {guild.name}: {e}")
-            invites_cache[guild.id] = []
 
     try:
         await update_bot_presence()
