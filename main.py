@@ -75,7 +75,7 @@ async def ask_ai(prompt: str) -> str:
     def _fetch():
         try:
             response = client_ai.models.generate_content(
-                model='gemini-2.5-flash',
+                model='gemini-3.6-flash',
                 contents=prompt,
             )
             return response.text
