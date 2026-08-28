@@ -747,21 +747,24 @@ async def on_member_remove(member: discord.Member):
     except Exception:
         pass
 
-# ========== אירוע להתחברות הבוט (מתוקן) ==========
+# ========== אירוע להתחברות הבוט (מוגן) ==========
 @bot.event
 async def on_ready():
-    bot.add_view(CreateTicketView())
-    bot.add_view(TicketControlView())
-    bot.add_view(CheckInvitesView())
-    bot.add_view(DropView())
-    bot.add_view(DMPanelView())
-    bot.add_view(IPButton())
-    bot.add_view(IPPanelView())
-    bot.add_view(ReviewPanelView())
+    try:
+        bot.add_view(CreateTicketView())
+        bot.add_view(TicketControlView())
+        bot.add_view(CheckInvitesView())
+        bot.add_view(DropView())
+        bot.add_view(DMPanelView())
+        bot.add_view(IPButton())
+        bot.add_view(IPPanelView())
+        bot.add_view(ReviewPanelView())
+    except Exception as e:
+        print(f"Error adding views: {e}")
 
     try:
         await update_bot_presence()
-        print("Bot status successfully set to Listening!")
+        print("Bot status successfully set!")
     except Exception as e:
         print(f"Error setting bot presence: {e}")
 
