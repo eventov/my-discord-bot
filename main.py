@@ -59,22 +59,31 @@ user_last_messages = {}
 
 LINK_REGEX = re.compile(r'https?://[^\s]+|discord\.gg/[^\s]+', re.IGNORECASE)
 
-# ========== NVIDIA API (AI) ==========
+# ========== NVIDIA API (AI) - עם גיבוי ==========
 
 NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY")
 NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 AI_COOLDOWN = {}
 
-# מודל ש**בטוח** עובד
-DEFAULT_MODEL = "google/gemma-2-2b-it"
+# מודלים שעובדים **בטוח** - Mistral כרגע הכי יציב
+AVAILABLE_MODELS = [
+    "mistralai/mistral-7b-instruct-v0.3",
+    "meta/llama-3.1-70b-instruct",
+    "deepseek-ai/deepseek-coder-6.7b-instruct",
+]
 
-async def ask_nvidia(prompt: str, model: str = DEFAULT_MODEL):
+DEFAULT_MODEL = "mistralai/mistral-7b-instruct-v0.3"
+current_model = DEFAULT_MODEL
+
+async def ask_nvidia(prompt: str, model: str = None):
     if not NVIDIA_API_KEY:
         return "❌ NVIDIA API Key לא מוגדר. הוסף אותו ב-Render."
 
-    # בדיקה מהירה אם המפתח נראה תקין
     if not NVIDIA_API_KEY.startswith("nvapi-"):
-        return "❌ ה-API Key לא נראה תקין (צריך להתחיל ב-nvapi-). צור מפתח חדש ב-NVIDIA Build."
+        return "❌ ה-API Key לא נראה תקין. צור מפתח חדש ב-NVIDIA Build."
+
+    if model is None:
+        model = current_model
 
     headers = {
         "Authorization": f"Bearer {NVIDIA_API_KEY}",
@@ -108,8 +117,12 @@ async def ask_nvidia(prompt: str, model: str = DEFAULT_MODEL):
                     return data["choices"][0]["message"]["content"]
                 elif resp.status == 401:
                     return "❌ ה-API Key לא תקין. צור מפתח חדש ב-NVIDIA Build."
-                elif resp.status == 404:
-                    return f"❌ המודל '{model}' לא נמצא. נסה: `!ai_model <מודל>`\nמודלים פעילים: mistralai/mistral-7b-instruct-v0.3, meta/llama-3.1-70b-instruct"
+                elif resp.status in [404, 410]:
+                    # מודל לא נמצא - ננסה את Mistral במקום
+                    if model != "mistralai/mistral-7b-instruct-v0.3":
+                        return await ask_nvidia(prompt, "mistralai/mistral-7b-instruct-v0.3")
+                    else:
+                        return f"❌ המודל '{model}' לא נמצא. נסה: `!ai_model mistralai/mistral-7b-instruct-v0.3`"
                 else:
                     error_text = await resp.text()
                     return f"❌ שגיאה {resp.status}: {error_text[:200]}"
@@ -146,33 +159,38 @@ async def ai_command(ctx, *, prompt: str):
 @bot.command(name='ai_model')
 async def ai_model_command(ctx, model: str = None):
     """משנה את המודל או מציג את המודל הנוכחי."""
-    global DEFAULT_MODEL
+    global current_model
     
     if not model:
-        await ctx.send(f"📚 המודל הנוכחי: `{DEFAULT_MODEL}`\n"
-                       f"לשינוי: `!ai_model <שם_מודל>`\n"
-                       f"מודלים מומלצים:\n"
-                       f"• `mistralai/mistral-7b-instruct-v0.3`\n"
-                       f"• `meta/llama-3.1-70b-instruct`\n"
-                       f"• `google/gemma-2-2b-it`")
+        await ctx.send(f"📚 מודל נוכחי: `{current_model}`\n"
+                       f"מודלים זמינים:\n"
+                       f"• `mistralai/mistral-7b-instruct-v0.3` - מומלץ, עובד בטוח\n"
+                       f"• `meta/llama-3.1-70b-instruct` - חזק יותר\n"
+                       f"• `deepseek-ai/deepseek-coder-6.7b-instruct` - לקוד\n"
+                       f"לשינוי: `!ai_model <שם_מודל>`")
         return
     
-    DEFAULT_MODEL = model
+    # בדיקה שהמודל קיים ברשימה
+    if model not in AVAILABLE_MODELS:
+        await ctx.send(f"❌ המודל '{model}' לא ברשימה. מודלים זמינים:\n" + "\n".join(f"• `{m}`" for m in AVAILABLE_MODELS))
+        return
+    
+    current_model = model
     await ctx.send(f"✅ מודל שונה ל: `{model}`")
 
 @bot.command(name='ai_models')
 async def ai_models_command(ctx):
     embed = discord.Embed(
-        title="📚 מודלים מומלצים",
+        title="📚 מודלים זמינים",
         description="מודלים ש**עובדים** עכשיו ב-NVIDIA:",
         color=discord.Color.blue()
     )
     embed.add_field(
         name="🤖 מודלים פעילים",
-        value="• `google/gemma-2-2b-it` - קליל, מהיר, עובד בטוח\n"
-              "• `mistralai/mistral-7b-instruct-v0.3` - חכם ואיכותי\n"
+        value="• `mistralai/mistral-7b-instruct-v0.3` - מומלץ, הכי יציב\n"
               "• `meta/llama-3.1-70b-instruct` - חזק אבל איטי\n"
-              "• `deepseek-ai/deepseek-coder-6.7b-instruct` - לקוד",
+              "• `deepseek-ai/deepseek-coder-6.7b-instruct` - מודל לקוד\n\n"
+              f"**מודל נוכחי:** `{current_model}`",
         inline=False
     )
     embed.add_field(
@@ -219,7 +237,7 @@ async def setup_ai_channel(ctx):
 
     await ctx.send(f"✅ חדר AI נוצר: {channel.mention}")
 
-# ========== מערכת ביקורות ==========
+# ========== שאר המערכות ==========
 
 class ReviewModal(discord.ui.Modal, title='✍️ כתיבת ביקורת'):
     system_name = discord.ui.TextInput(
@@ -297,8 +315,6 @@ async def setup_reviews(ctx):
         color=discord.Color.gold()
     )
     await ctx.send(embed=embed, view=ReviewPanelView())
-
-# ========== IP ==========
 
 def get_ip_info(ip):
     try:
@@ -384,8 +400,6 @@ class IPButton(discord.ui.View):
     @discord.ui.button(label='🔍 בדוק IP', style=discord.ButtonStyle.primary, emoji='🌐')
     async def ip_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(IPModal())
-
-# ========== פונקציות עזר ==========
 
 def load_invites_data():
     if not os.path.exists(INVITES_FILE):
@@ -500,8 +514,6 @@ def is_allowed_user():
             pass
         return False
     return commands.check(predicate)
-
-# ========== DM Panel ==========
 
 class SendDMModal(discord.ui.Modal, title="שלח הודעה פרטית"):
     user_id_input = discord.ui.TextInput(
@@ -714,8 +726,6 @@ class CreateTicketView(discord.ui.View):
         )
         await ticket_channel.send(embed=ticket_embed, view=TicketControlView())
 
-# --- אירוע הודעות ---
-
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot or not message.guild:
@@ -788,8 +798,6 @@ async def on_message(message: discord.Message):
 
     await bot.process_commands(message)
 
-# --- אירועים ---
-
 @bot.event
 async def on_member_join(member: discord.Member):
     role = member.guild.get_role(AUTO_ROLE_ID)
@@ -846,11 +854,9 @@ async def on_ready():
     print(f'📊 נמצא ב-{len(bot.guilds)} שרתים')
     if NVIDIA_API_KEY:
         print(f'✅ NVIDIA API Key נמצא')
-        print(f'✅ מודל: {DEFAULT_MODEL}')
+        print(f'✅ מודל נוכחי: {current_model}')
     else:
         print('⚠️ NVIDIA API Key חסר')
-
-# ========== פקודות ==========
 
 @bot.command(name='ip')
 async def ip_command(ctx):
