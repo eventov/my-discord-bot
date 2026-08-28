@@ -65,7 +65,10 @@ NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY")
 NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 AI_COOLDOWN = {}
 
-async def ask_nvidia(prompt: str, model: str = "meta/llama-3.1-8b-instruct"):
+# המודל החדש - Mistral 7B שעדיין פעיל
+DEFAULT_MODEL = "mistralai/mistral-7b-instruct-v0.3"
+
+async def ask_nvidia(prompt: str, model: str = DEFAULT_MODEL):
     """שולח שאלה ל-NVIDIA API ומחזיר תשובה."""
     if not NVIDIA_API_KEY:
         return "❌ NVIDIA API Key לא מוגדר. הוסף אותו ב-Render כמשתנה סביבה."
@@ -134,10 +137,9 @@ async def ai_models_command(ctx):
         color=discord.Color.blue()
     )
     embed.add_field(
-        name="🤖 מודלים מומלצים",
-        value="• `meta/llama-3.1-8b-instruct` - מהיר וחכם\n"
+        name="🤖 מודלים מומלצים (פעילים)",
+        value="• `mistralai/mistral-7b-instruct-v0.3` - מודל ברירת מחדל (מהיר וחכם)\n"
               "• `meta/llama-3.1-70b-instruct` - חזק יותר (איטי יותר)\n"
-              "• `mistralai/mistral-7b-instruct-v0.3` - קליל ומהיר\n"
               "• `deepseek-ai/deepseek-coder-6.7b-instruct` - מודל לקוד",
         inline=False
     )
@@ -863,6 +865,7 @@ async def on_ready():
     print(f'📊 נמצא ב-{len(bot.guilds)} שרתים')
     if NVIDIA_API_KEY:
         print('✅ NVIDIA API Key נמצא')
+        print(f'✅ מודל ברירת מחדל: {DEFAULT_MODEL}')
     else:
         print('⚠️ NVIDIA API Key חסר - AI לא יעבוד')
 
