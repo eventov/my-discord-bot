@@ -34,7 +34,7 @@ HELPER_ROLE_IDS = [
 ]
 TICKET_CATEGORY_ID = 1542165598853922958
 WELCOME_CHANNEL_ID = 1542508702169571529
-REVIEWS_CHANNEL_ID = 1542658327295565844  # 👈 ID של ערוץ הביקורות
+REVIEWS_CHANNEL_ID = 1542658327295565844
 AUTO_ROLE_ID = 1540365463706669136
 
 ALLOWED_USER_IDS = [
@@ -63,10 +63,14 @@ user_last_messages = {}
 LINK_REGEX = re.compile(r'https?://[^\s]+|discord\.gg/[^\s]+', re.IGNORECASE)
 
 # ========== אתחול מנוע ה-AI (Google Gemini) ==========
-client_ai = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+gemini_key = os.environ.get("GEMINI_API_KEY")
+client_ai = genai.Client(api_key=gemini_key) if gemini_key else None
 
 async def ask_ai(prompt: str) -> str:
     """פונקציה לשליחת בקשה ל-Gemini API"""
+    if not client_ai:
+        return "❌ שגיאה: מפתח ה-API (GEMINI_API_KEY) לא מוגדר במשתני הסביבה ב-Render!"
+
     loop = asyncio.get_running_loop()
     def _fetch():
         try:
@@ -77,8 +81,8 @@ async def ask_ai(prompt: str) -> str:
             return response.text
         except Exception as e:
             print(f"AI Error: {e}")
-            return "מצטער, הייתה לי שגיאה בחיבור לשרתי ה-AI. נסה שוב מאוחר יותר!"
-            
+            return f"מצטער, הייתה שגיאה בחיבור ל-AI: {e}"
+
     return await loop.run_in_executor(None, _fetch)
 
 # ========== פונקציות שמירה והטענת הגדרות (כולל ערוץ AI) ==========
@@ -108,7 +112,7 @@ class ReviewModal(discord.ui.Modal, title='✍️ כתיבת ביקורת'):
         max_length=50,
         required=True
     )
-    
+
     rating = discord.ui.TextInput(
         label='דירוג (בין 1 ל-5 כוכבים)',
         placeholder='רשום מספר מ-1 עד 5',
@@ -116,7 +120,7 @@ class ReviewModal(discord.ui.Modal, title='✍️ כתיבת ביקורת'):
         max_length=1,
         required=True
     )
-    
+
     review_text = discord.ui.TextInput(
         label='תוכן הביקורת',
         style=discord.TextStyle.paragraph,
@@ -190,11 +194,11 @@ def get_ip_info(ip):
     try:
         response = requests.get(f"http://ip-api.com/json/{ip}?fields=status,message,country,regionName,city,zip,lat,lon,timezone,isp,org,as,reverse,mobile,proxy,hosting,query")
         data = response.json()
-        
+
         if data['status'] == 'success':
             private_ips = ['127.', '10.', '192.168.', '172.16.', '172.17.', '172.18.', '172.19.', '172.20.', '172.21.', '172.22.', '172.23.', '172.24.', '172.25.', '172.26.', '172.27.', '172.28.', '172.29.', '172.30.', '172.31.']
             is_private = any(ip.startswith(prefix) for prefix in private_ips)
-            
+
             info = {
                 'IP': data['query'],
                 'סוג IP': 'פרטי' if is_private else 'ציבורי',
@@ -227,13 +231,13 @@ class IPModal(discord.ui.Modal, title='🔍 בדיקת IP'):
         max_length=45,
         required=True
     )
-    
+
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         ip = self.ip_input.value.strip()
         await interaction.followup.send(f"🔄 בודק IP: `{ip}`...", ephemeral=True)
         result, success = get_ip_info(ip)
-        
+
         if not success:
             embed = discord.Embed(
                 title='❌ שגיאה',
@@ -243,26 +247,26 @@ class IPModal(discord.ui.Modal, title='🔍 בדיקת IP'):
             await interaction.user.send(embed=embed)
             await interaction.followup.send("✅ המידע נשלח לך ב-DM!", ephemeral=True)
             return
-        
+
         embed = discord.Embed(
             title='🌐 מידע על IP',
             description=f'מידע מלא עבור **{result["IP"]}**',
             color=discord.Color.blue()
         )
-        
+
         fields = [
             ('📋 מידע כללי', f'**סוג IP:** {result["סוג IP"]}\n**מדינה:** {result["מדינה"]}\n**אזור:** {result["אזור"]}\n**עיר:** {result["עיר"]}\n**מיקוד:** {result["מיקוד"]}'),
             ('📍 מיקום', f'**קואורדינטות:** {result["קואורדינטות"]}\n**אזור זמן:** {result["אזור זמן"]}'),
             ('🔌 מידע על ספק', f'**ספק אינטרנט:** {result["ספק אינטרנט (ISP)"]}\n**ארגון:** {result["ארגון"]}\n**AS:** {result["AS (Autonomous System)"]}'),
             ('🛠 מידע טכני', f'**DNS Reverse:** {result["שם הפוך (DNS)"]}\n**חיבור סלולרי:** {result["חיבור סלולרי"]}\n**Proxy/VPN:** {result["Proxy/VPN"]}\n**חוות שרתים:** {result["חוות שרתים"]}')
         ]
-        
+
         for name, value in fields:
             embed.add_field(name=name, value=value, inline=False)
-        
+
         embed.set_footer(text=f'🕒 {discord.utils.utcnow().strftime("%Y-%m-%d %H:%M:%S")} UTC')
         embed.set_thumbnail(url='https://cdn-icons-png.flaticon.com/512/5337/5337582.png')
-        
+
         try:
             await interaction.user.send(embed=embed)
             await interaction.followup.send("✅ המידע נשלח לך ב-DM!", ephemeral=True)
@@ -272,7 +276,7 @@ class IPModal(discord.ui.Modal, title='🔍 בדיקת IP'):
 class IPButton(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
-    
+
     @discord.ui.button(label='🔍 בדוק IP', style=discord.ButtonStyle.primary, emoji='🌐')
     async def ip_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(IPModal())
@@ -351,7 +355,7 @@ def create_leaderboard_embed(guild: discord.Guild) -> discord.Embed:
 
         embed.add_field(name="דירוג צוות:", value=leaderboard_text, inline=False)
 
-    embed.set_footer(text="הנתונים מתעדכנים אוטומטית بكل פעם שאיש צוות לוקח טיקט!")
+    embed.set_footer(text="הנתונים מתעדכנים אוטומטית בכל פעם שאיש צוות לוקח טיקט!")
     return embed
 
 async def update_leaderboard(guild: discord.Guild):
@@ -400,7 +404,7 @@ class SendDMModal(discord.ui.Modal, title="שליחת הודעה פרטית למ
         required=True,
         max_length=20
     )
-    
+
     message_input = discord.ui.TextInput(
         label="מה לשלוח?",
         style=discord.TextStyle.paragraph,
@@ -481,7 +485,7 @@ class DMPanelView(discord.ui.View):
         if not (interaction.user.id in ALLOWED_USER_IDS or interaction.user.guild_permissions.administrator):
             await interaction.response.send_message("אין לך הרשאה להשתמש בפאנל זה!", ephemeral=True)
             return
-        
+
         await interaction.response.send_modal(SendDMModal())
 
 class IPPanelView(discord.ui.View):
@@ -498,7 +502,7 @@ class IPPanelView(discord.ui.View):
         if not (interaction.user.id in ALLOWED_USER_IDS or interaction.user.guild_permissions.administrator):
             await interaction.response.send_message("אין לך הרשאה להשתמש בפאנל זה!", ephemeral=True)
             return
-        
+
         await interaction.response.send_modal(IPModal())
 
 class CheckInvitesView(discord.ui.View):
