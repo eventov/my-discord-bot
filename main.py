@@ -85,7 +85,7 @@ async def ask_ai(prompt: str) -> str:
 
     return await loop.run_in_executor(None, _fetch)
 
-# ========== פונקציות שמירה והטענת הגדרות (כולל ערוץ AI) ==========
+# ========== פונקציות שמירה והטענת הגדרות ==========
 def load_settings():
     if not os.path.exists(SETTINGS_FILE):
         return {"ai_channel_id": None}
@@ -102,8 +102,7 @@ def save_settings(data):
     except Exception:
         pass
 
-# ========== מערכת ביקורות (REVIEWS SYSTEM) ==========
-
+# ========== מערכת ביקורות ==========
 class ReviewModal(discord.ui.Modal, title='✍️ כתיבת ביקורת'):
     system_name = discord.ui.TextInput(
         label='שם המערכת / השירות',
@@ -222,7 +221,6 @@ def get_ip_info(ip):
     except Exception as e:
         return f"שגיאה: {str(e)}", False
 
-# ========== מודאל IP ==========
 class IPModal(discord.ui.Modal, title='🔍 בדיקת IP'):
     ip_input = discord.ui.TextInput(
         label='הזן כתובת IP',
@@ -396,7 +394,6 @@ def is_allowed_user():
         return False
     return commands.check(predicate)
 
-# --- Modal שליחת DM ---
 class SendDMModal(discord.ui.Modal, title="שליחת הודעה פרטית למשתמש"):
     user_id_input = discord.ui.TextInput(
         label="ID של המשתמש",
@@ -632,11 +629,9 @@ async def on_message(message: discord.Message):
     now = time.time()
     clean_content = message.content.strip().lower()
 
-    # טעינת הגדרת ערוץ ה-AI
     settings = load_settings()
     ai_channel_id = settings.get("ai_channel_id")
 
-    # בדיקות תיוג/תגובה/חדר AI
     is_mentioned = bot.user in message.mentions
     is_reply_to_bot = (
         message.reference 
@@ -660,7 +655,6 @@ async def on_message(message: discord.Message):
                 await message.reply(response)
         return
 
-    # --- מנגנון הגנה מספאם ---
     if clean_content:
         user_history = user_last_messages.get(user_id, [])
         user_history = [item for item in user_history if now - item['time'] < 60]
@@ -680,7 +674,6 @@ async def on_message(message: discord.Message):
                 pass
             return
 
-    # --- מנגנון הגנה מקישורים ---
     if LINK_REGEX.search(message.content):
         try:
             await message.delete()
@@ -698,7 +691,7 @@ async def on_message(message: discord.Message):
 
     await bot.process_commands(message)
 
-# פונקציית עזר לעדכון הסטטוס
+# ========== פונקציית עדכון הסטטוס ==========
 async def update_bot_presence():
     total_members = sum(guild.member_count for guild in bot.guilds if guild.member_count)
     activity = discord.Activity(
@@ -726,7 +719,7 @@ async def on_member_join(member: discord.Member):
                     inviter = new_inv.inviter
                     break
         invites_cache[member.guild.id] = new_invites
-    except discord.Forbidden:
+    except Exception:
         pass
 
     if inviter and not inviter.bot:
@@ -742,14 +735,19 @@ async def on_member_join(member: discord.Member):
         )
         await welcome_channel.send(content=f"שלום לכולם, תברכו את {member.mention}!", embed=embed)
 
-    # עדכון מספר המשתמשים בסטטוס בעת הצטרפות
-    await update_bot_presence()
+    try:
+        await update_bot_presence()
+    except Exception:
+        pass
 
 @bot.event
 async def on_member_remove(member: discord.Member):
-    # עדכון מספר המשתמשים בסטטוס בעת עזיבה
-    await update_bot_presence()
+    try:
+        await update_bot_presence()
+    except Exception:
+        pass
 
+# ========== אירוע להתחברות הבוט (מוגן משגיאות) ==========
 @bot.event
 async def on_ready():
     bot.add_view(CreateTicketView())
@@ -764,16 +762,19 @@ async def on_ready():
     for guild in bot.guilds:
         try:
             invites_cache[guild.id] = await guild.invites()
-        except discord.Forbidden:
+        except Exception as e:
+            print(f"Invite warning for {guild.name}: {e}")
             invites_cache[guild.id] = []
 
-    # הגדרת הסטטוס בהתחברות הבוט
-    await update_bot_presence()
+    try:
+        await update_bot_presence()
+        print("Bot status successfully set to Listening!")
+    except Exception as e:
+        print(f"Error setting bot presence: {e}")
 
     print(f'הבוט מחובר בתור {bot.user}')
 
-# ========== פקודת הגדרת חדר AI ==========
-
+# ========== פקודות ==========
 @bot.command(name='setup_ai', aliases=['ai_setup'])
 @is_allowed_user()
 async def setup_ai_channel(ctx):
@@ -792,8 +793,6 @@ async def setup_ai_channel(ctx):
         color=discord.Color.green()
     )
     await ctx.send(embed=embed)
-
-# ========== פקודות IP ==========
 
 @bot.command(name='ip')
 async def ip_command(ctx):
@@ -821,8 +820,6 @@ async def setup_ip_panel(ctx):
         color=discord.Color.blue()
     )
     await ctx.send(embed=embed, view=IPPanelView())
-
-# ========== פקודות מנהלים ==========
 
 @bot.command()
 @is_allowed_user()
