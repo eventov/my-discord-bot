@@ -10,7 +10,6 @@ import discord
 from discord.ext import commands
 import requests
 import aiohttp
-import hashlib
 
 # --- שרת WEB קטן לשמירה על הבוט ער ב-Render ---
 app = Flask('')
@@ -57,421 +56,135 @@ user_cooldowns = {}
 user_link_warnings = {}
 invites_cache = {}
 user_last_messages = {}
-lookup_cache = {}
 
 LINK_REGEX = re.compile(r'https?://[^\s]+|discord\.gg/[^\s]+', re.IGNORECASE)
 
-# ========== פונקציות OSINT / LOOKUP ==========
+# ========== NVIDIA API (AI) ==========
 
-async def get_user_info(user_id: int):
-    """Fetch Discord user info and return as dict."""
-    try:
-        user = await bot.fetch_user(user_id)
-        return {
-            "id": user.id,
-            "name": user.name,
-            "display_name": user.display_name,
-            "global_name": user.global_name,
-            "avatar_url": user.display_avatar.url,
-            "bot": user.bot,
-            "created_at": user.created_at.isoformat(),
-            "accent_color": user.accent_color,
-            "banner_url": user.banner.url if user.banner else None,
-        }
-    except discord.NotFound:
-        return None
-    except Exception as e:
-        return {"error": str(e)}
+NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY")
+NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
+AI_COOLDOWN = {}
 
-async def check_breaches(email: str):
-    """Check if an email appears in known breaches via Have I Been Pwned API."""
-    try:
-        email_hash = hashlib.sha1(email.lower().encode()).hexdigest().upper()
-        url = f"https://api.pwnedpasswords.com/range/{email_hash[:5]}"
-        
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as resp:
-                if resp.status == 200:
-                    data = await resp.text()
-                    suffix = email_hash[5:]
-                    for line in data.splitlines():
-                        if line.startswith(suffix):
-                            count = int(line.split(':')[1])
-                            return count
-                    return 0
-                return 0
-    except Exception:
-        return 0
+async def ask_nvidia(prompt: str, model: str = "meta/llama-3.1-8b-instruct"):
+    """שולח שאלה ל-NVIDIA API ומחזיר תשובה."""
+    if not NVIDIA_API_KEY:
+        return "❌ NVIDIA API Key לא מוגדר. הוסף אותו ב-Render כמשתנה סביבה."
 
-async def find_emails_from_username(username: str, user_id: str):
-    """Generate candidate emails based on username and ID."""
-    candidates = [
-        f"{username.lower()}@gmail.com",
-        f"{username.lower()}@outlook.com",
-        f"{username.lower()}@hotmail.com",
-        f"{username.lower()}@yahoo.com",
-        f"{username.replace(' ', '.').lower()}@gmail.com",
-        f"{username.replace(' ', '_').lower()}@gmail.com",
-        f"{username[:3]}{user_id[-4:]}@gmail.com",
-    ]
-    return list(set(candidates))
-
-async def search_username_online(username: str):
-    """מחפש שם משתמש בפלטפורמות שונות."""
-    platforms = {
-        "GitHub": f"https://github.com/{username}",
-        "Twitter/X": f"https://twitter.com/{username}",
-        "Instagram": f"https://instagram.com/{username}",
-        "Reddit": f"https://reddit.com/user/{username}",
-        "YouTube": f"https://youtube.com/@{username}",
-        "TikTok": f"https://tiktok.com/@{username}",
-        "Twitch": f"https://twitch.tv/{username}",
-        "Pinterest": f"https://pinterest.com/{username}",
-        "Steam": f"https://steamcommunity.com/id/{username}",
+    headers = {
+        "Authorization": f"Bearer {NVIDIA_API_KEY}",
+        "Content-Type": "application/json"
     }
-    return platforms
 
-async def search_messages_for_user(guild: discord.Guild, user: discord.Member, limit: int = 50, keyword: str = None):
-    """מחפש הודעות של משתמש בערוצים."""
-    found = []
-    for channel in guild.text_channels:
-        try:
-            async for message in channel.history(limit=limit):
-                if message.author == user:
-                    if keyword and keyword.lower() in message.content.lower():
-                        found.append({
-                            "channel": channel.name,
-                            "content": message.content[:200],
-                            "time": message.created_at,
-                            "url": message.jump_url
-                        })
-                    elif not keyword:
-                        found.append({
-                            "channel": channel.name,
-                            "content": message.content[:200],
-                            "time": message.created_at,
-                            "url": message.jump_url
-                        })
-        except:
-            continue
-    return found
-
-async def scan_user_links(guild: discord.Guild, user: discord.Member, limit: int = 50):
-    """סורק קישורים ששלח משתמש."""
-    links = []
-    for channel in guild.text_channels:
-        try:
-            async for message in channel.history(limit=limit):
-                if message.author == user:
-                    urls = re.findall(r'https?://[^\s<>]+', message.content)
-                    for url in urls:
-                        links.append({
-                            "url": url,
-                            "channel": channel.name,
-                            "time": message.created_at
-                        })
-        except:
-            continue
-    return links
-
-# ========== מודאל LOOKUP ==========
-
-class LookupModal(discord.ui.Modal, title='🔍 חיפוש משתמש לפי ID'):
-    user_id_input = discord.ui.TextInput(
-        label='הזן את ה-ID של המשתמש',
-        placeholder='לדוגמה: 1228062821690904748',
-        min_length=17,
-        max_length=20,
-        required=True
-    )
-
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        
-        user_id_str = self.user_id_input.value.strip()
-        try:
-            user_id = int(user_id_str)
-        except ValueError:
-            await interaction.followup.send("❌ ID לא תקין! הזן מספר בלבד.", ephemeral=True)
-            return
-
-        cache_key = f"lookup_{user_id}"
-        if cache_key in lookup_cache:
-            await interaction.followup.send(embed=lookup_cache[cache_key], ephemeral=True)
-            return
-
-        user_info = await get_user_info(user_id)
-        if not user_info:
-            await interaction.followup.send(f"❌ לא נמצא משתמש עם ID: `{user_id_str}`", ephemeral=True)
-            return
-        if "error" in user_info:
-            await interaction.followup.send(f"❌ שגיאה: {user_info['error']}", ephemeral=True)
-            return
-
-        emails = await find_emails_from_username(user_info["name"], user_id_str)
-
-        breach_results = []
-        for email in emails[:5]:
-            count = await check_breaches(email)
-            if count > 0:
-                breach_results.append(f"🔴 `{email}` - נמצא/ה ב-{count} פריצות/הדלפות")
-            else:
-                breach_results.append(f"🟢 `{email}` - לא נמצא/ה בפריצות ידועות")
-
-        embed = discord.Embed(
-            title=f"🔍 מידע על משתמש: {user_info['name']}",
-            color=discord.Color.purple(),
-            timestamp=discord.utils.utcnow()
-        )
-        embed.set_thumbnail(url=user_info['avatar_url'])
-        
-        embed.add_field(
-            name="📋 פרטים בסיסיים",
-            value=f"**ID:** `{user_info['id']}`\n"
-                  f"**שם תצוגה:** {user_info['display_name']}\n"
-                  f"**שם גלובלי:** {user_info['global_name'] or 'לא מוגדר'}\n"
-                  f"**בוט?** {'✅ כן' if user_info['bot'] else '❌ לא'}\n"
-                  f"**נוצר בתאריך:** {user_info['created_at']}",
-            inline=False
-        )
-
-        embed.add_field(
-            name="📧 אימיילים מועמדים (לפי שם המשתמש)",
-            value="\n".join(breach_results) if breach_results else "לא נמצאו אימיילים מועמדים",
-            inline=False
-        )
-
-        embed.set_footer(text=f"🕒 נשלח לבקשת {interaction.user.display_name}")
-
-        lookup_cache[cache_key] = embed
-        async def clear_cache():
-            await asyncio.sleep(3600)
-            lookup_cache.pop(cache_key, None)
-        asyncio.create_task(clear_cache())
-
-        try:
-            await interaction.user.send(embed=embed)
-            await interaction.followup.send("✅ המידע נשלח לך ב-DM!", ephemeral=True)
-        except discord.Forbidden:
-            await interaction.followup.send("❌ לא ניתן לשלוח לך DM. אנא פתח את ה-DMs שלך.", ephemeral=True)
-
-class LookupPanelView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(
-        label="🔍 חפש משתמש לפי ID",
-        style=discord.ButtonStyle.blurple,
-        custom_id="lookup_btn",
-        emoji="🔎"
-    )
-    async def open_lookup_modal(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not (interaction.user.id in ALLOWED_USER_IDS or interaction.user.guild_permissions.administrator):
-            await interaction.response.send_message("❌ אין לך הרשאה להשתמש בפאנל זה!", ephemeral=True)
-            return
-        await interaction.response.send_modal(LookupModal())
-
-# ========== פקודות OSINT ==========
-
-@bot.command(name='lookup')
-async def lookup_command(ctx, user_id: str = None):
-    """חיפוש מידע בסיסי על משתמש לפי ID."""
-    if not user_id:
-        await ctx.send("❌ שימוש: `!lookup <ID_משתמש>`\nדוגמה: `!lookup 1228062821690904748`")
-        return
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "אתה עוזר חכם, ידידותי, שעונה בעברית. תן תשובות ברורות, מפורטות ומועילות."},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.7,
+        "max_tokens": 1024
+    }
 
     try:
-        user_id_int = int(user_id)
-    except ValueError:
-        await ctx.send("❌ ID לא תקין! הזן מספר בלבד.")
+        async with aiohttp.ClientSession() as session:
+            async with session.post(NVIDIA_API_URL, headers=headers, json=payload) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return data["choices"][0]["message"]["content"]
+                else:
+                    return f"❌ שגיאה מה-API: {resp.status}"
+    except Exception as e:
+        return f"❌ שגיאה: {str(e)}"
+
+# ========== פקודות AI ==========
+
+@bot.command(name='ai')
+async def ai_command(ctx, *, prompt: str):
+    """שואל את ה-AI שאלה."""
+    if not NVIDIA_API_KEY:
+        await ctx.send("❌ NVIDIA API Key לא מוגדר. הוסף אותו ב-Render.")
         return
 
-    cache_key = f"lookup_{user_id_int}"
-    if cache_key in lookup_cache:
-        await ctx.send(embed=lookup_cache[cache_key])
-        return
+    if ctx.author.id in AI_COOLDOWN:
+        remaining = int(AI_COOLDOWN[ctx.author.id] - time.time())
+        if remaining > 0:
+            await ctx.send(f"⏳ המתן עוד {remaining} שניות לפני שאלה נוספת.")
+            return
 
-    await ctx.send(f"🔍 מחפש מידע על משתמש `{user_id}`...")
+    AI_COOLDOWN[ctx.author.id] = time.time() + 5
 
-    user_info = await get_user_info(user_id_int)
-    if not user_info:
-        await ctx.send(f"❌ לא נמצא משתמש עם ID: `{user_id}`")
-        return
-    if "error" in user_info:
-        await ctx.send(f"❌ שגיאה: {user_info['error']}")
-        return
+    await ctx.send(f"🧠 **{ctx.author.display_name} שואל:** {prompt}\n\n_מחכה לתשובה..._")
 
-    emails = await find_emails_from_username(user_info["name"], user_id)
+    response = await ask_nvidia(prompt)
 
-    breach_results = []
-    for email in emails[:5]:
-        count = await check_breaches(email)
-        if count > 0:
-            breach_results.append(f"🔴 `{email}` - נמצא/ה ב-{count} פריצות/הדלפות")
-        else:
-            breach_results.append(f"🟢 `{email}` - לא נמצא/ה בפריצות ידועות")
+    if len(response) > 1900:
+        parts = [response[i:i+1900] for i in range(0, len(response), 1900)]
+        for part in parts:
+            await ctx.send(part)
+    else:
+        await ctx.send(response)
 
+@bot.command(name='ai_models')
+async def ai_models_command(ctx):
+    """מציג את המודלים הזמינים."""
     embed = discord.Embed(
-        title=f"🔍 מידע על משתמש: {user_info['name']}",
-        color=discord.Color.purple(),
-        timestamp=discord.utils.utcnow()
+        title="📚 מודלים זמינים ב-NVIDIA",
+        description="בחר מודל שמתאים לך!",
+        color=discord.Color.blue()
     )
-    embed.set_thumbnail(url=user_info['avatar_url'])
-
     embed.add_field(
-        name="📋 פרטים בסיסיים",
-        value=f"**ID:** `{user_info['id']}`\n"
-              f"**שם תצוגה:** {user_info['display_name']}\n"
-              f"**שם גלובלי:** {user_info['global_name'] or 'לא מוגדר'}\n"
-              f"**בוט?** {'✅ כן' if user_info['bot'] else '❌ לא'}\n"
-              f"**נוצר בתאריך:** {user_info['created_at']}",
+        name="🤖 מודלים מומלצים",
+        value="• `meta/llama-3.1-8b-instruct` - מהיר וחכם\n"
+              "• `meta/llama-3.1-70b-instruct` - חזק יותר (איטי יותר)\n"
+              "• `mistralai/mistral-7b-instruct-v0.3` - קליל ומהיר\n"
+              "• `deepseek-ai/deepseek-coder-6.7b-instruct` - מודל לקוד",
         inline=False
     )
-
     embed.add_field(
-        name="📧 אימיילים מועמדים (לפי שם המשתמש)",
-        value="\n".join(breach_results) if breach_results else "לא נמצאו אימיילים מועמדים",
+        name="📝 שימוש",
+        value="`!ai <שאלה>` - שואל את ה-AI",
         inline=False
     )
-
-    embed.set_footer(text=f"🕒 נשלח לבקשת {ctx.author.display_name}")
-
-    lookup_cache[cache_key] = embed
-    async def clear_cache():
-        await asyncio.sleep(3600)
-        lookup_cache.pop(cache_key, None)
-    asyncio.create_task(clear_cache())
-
     await ctx.send(embed=embed)
 
-@bot.command(name='osint')
-async def osint_command(ctx, user_id: str = None):
-    """OSINT מתקדם - מוצא מידע על משתמש בפלטפורמות שונות."""
-    if not user_id:
-        await ctx.send("❌ שימוש: `!osint <ID_משתמש>`\nדוגמה: `!osint 1228062821690904748`")
+@bot.command(name='setup_ai_channel')
+async def setup_ai_channel(ctx):
+    """מקים ערוץ ייעודי לשאלות AI."""
+    if ctx.author.id not in ALLOWED_USER_IDS and not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ אין לך הרשאה להפעיל את הפקודה הזו.")
         return
 
-    try:
-        user_id_int = int(user_id)
-    except ValueError:
-        await ctx.send("❌ ID לא תקין! הזן מספר בלבד.")
+    existing = discord.utils.get(ctx.guild.channels, name="🤖-ask-ai")
+    if existing:
+        await ctx.send(f"✅ ערוץ AI כבר קיים: {existing.mention}")
         return
 
-    await ctx.send(f"🕵️ **מתחיל OSINT על `{user_id}`...**")
+    overwrites = {
+        ctx.guild.default_role: discord.PermissionOverwrite(
+            send_messages=True,
+            read_messages=True
+        )
+    }
 
-    # מידע בסיסי
-    user_info = await get_user_info(user_id_int)
-    if not user_info:
-        await ctx.send(f"❌ לא נמצא משתמש עם ID: `{user_id}`")
-        return
-    if "error" in user_info:
-        await ctx.send(f"❌ שגיאה: {user_info['error']}")
-        return
-
-    # אימיילים מועמדים
-    emails = await find_emails_from_username(user_info["name"], user_id)
-    breach_results = []
-    for email in emails[:3]:
-        count = await check_breaches(email)
-        if count > 0:
-            breach_results.append(f"🔴 `{email}` - {count} פריצות")
-        else:
-            breach_results.append(f"🟢 `{email}` - לא נמצא")
-
-    # חיפוש בפלטפורמות
-    platforms = await search_username_online(user_info["name"])
+    channel = await ctx.guild.create_text_channel(
+        name="🤖-ask-ai",
+        overwrites=overwrites,
+        topic="🤖 שאלו את ה-AI כל מה שבא לכם! (יש קולדאון של 5 שניות)"
+    )
 
     embed = discord.Embed(
-        title=f"🕵️ OSINT - {user_info['name']}",
-        color=discord.Color.dark_purple(),
-        timestamp=discord.utils.utcnow()
+        title="🤖 ברוכים הבאים לחדר ה-AI!",
+        description="כאן אפשר לשאול את ה-AI כל שאלה - והוא יענה לכם!\n"
+                    "כתבו את השאלה שלכם בערוץ הזה וה-AI יענה אוטומטית.\n\n"
+                    "⚡ **טיפים:**\n"
+                    "• שאלו שאלות ברורות\n"
+                    "• אפשר לשאול על כל נושא\n"
+                    "• יש 5 שניות קולדאון בין שאלות",
+        color=discord.Color.blue()
     )
-    embed.set_thumbnail(url=user_info['avatar_url'])
+    await channel.send(embed=embed)
 
-    embed.add_field(
-        name="📋 מידע בסיסי",
-        value=f"**ID:** `{user_info['id']}`\n"
-              f"**שם:** {user_info['display_name']}\n"
-              f"**נוצר:** {user_info['created_at']}\n"
-              f"**בוט:** {'✅' if user_info['bot'] else '❌'}",
-        inline=False
-    )
-
-    embed.add_field(
-        name="📧 אימיילים מועמדים",
-        value="\n".join(breach_results) if breach_results else "לא נמצאו",
-        inline=False
-    )
-
-    embed.add_field(
-        name="🔗 פלטפורמות אפשריות (לפי שם משתמש)",
-        value="\n".join([f"• **{k}:** {v}" for k, v in list(platforms.items())[:8]]),
-        inline=False
-    )
-
-    embed.set_footer(text=f"🕒 נשלח לבקשת {ctx.author.display_name}")
-
-    await ctx.send(embed=embed)
-
-@bot.command(name='searchmsg')
-async def search_messages_command(ctx, user: discord.Member = None, *, keyword: str = None):
-    """מחפש הודעות של משתמש בערוצים."""
-    if not user:
-        await ctx.send("❌ שימוש: `!searchmsg @משתמש <מילת_חיפוש>`")
-        return
-
-    await ctx.send(f"🔍 מחפש הודעות של {user.mention}... (זה עלול לקחת כמה שניות)")
-
-    found = await search_messages_for_user(ctx.guild, user, limit=50, keyword=keyword)
-
-    if found:
-        output = f"📝 **נמצאו {len(found)} הודעות**\n"
-        for i, msg in enumerate(found[:5]):
-            output += f"\n**#{i+1}** [{msg['channel']}] {msg['time'].strftime('%H:%M')}\n{msg['content']}\n"
-        if len(found) > 5:
-            output += f"\n... ועוד {len(found)-5} הודעות"
-        await ctx.send(output[:1900])
-    else:
-        await ctx.send(f"❌ לא נמצאו הודעות של {user.mention}")
-
-@bot.command(name='scanlinks')
-async def scan_links_command(ctx, user: discord.Member = None):
-    """סורק קישורים ששלח משתמש."""
-    if not user:
-        await ctx.send("❌ שימוש: `!scanlinks @משתמש`")
-        return
-
-    await ctx.send(f"🔗 סורק קישורים של {user.mention}... (זה עלול לקחת כמה שניות)")
-
-    links = await scan_user_links(ctx.guild, user, limit=50)
-
-    if links:
-        output = f"📌 **נמצאו {len(links)} קישורים**\n"
-        for i, link in enumerate(links[:10]):
-            output += f"\n**#{i+1}** [{link['channel']}] {link['url']}"
-        if len(links) > 10:
-            output += f"\n... ועוד {len(links)-10} קישורים"
-        await ctx.send(output[:1900])
-    else:
-        await ctx.send(f"❌ לא נמצאו קישורים של {user.mention}")
-
-@bot.command(name='setup_lookup')
-async def setup_lookup_panel(ctx):
-    """העמדת פאנל חיפוש משתמשים."""
-    try:
-        await ctx.message.delete()
-    except Exception:
-        pass
-
-    embed = discord.Embed(
-        title="🔍 מערכת חיפוש משתמשים",
-        description="חפש מידע על כל משתמש Discord לפי ID שלו!\n"
-                   "המידע כולל פרטי משתמש, אימיילים מועמדים, ובדיקת פריצות/הדלפות.\n\n"
-                   "לחץ על הכפתור למטה כדי להתחיל.",
-        color=discord.Color.purple()
-    )
-    embed.set_footer(text="התוצאות ישלחו אליך בהודעה פרטית.")
-    await ctx.send(embed=embed, view=LookupPanelView())
+    await ctx.send(f"✅ ערוץ AI נוצר בהצלחה! {channel.mention}")
 
 # ========== מערכת ביקורות (REVIEWS SYSTEM) ==========
 
@@ -1024,6 +737,32 @@ async def on_message(message: discord.Message):
     if message.author.bot or not message.guild:
         return
 
+    # ===== AI CHANNEL - תשובה אוטומטית =====
+    if message.channel.name == "🤖-ask-ai":
+        if not NVIDIA_API_KEY:
+            await message.reply("❌ NVIDIA API Key לא מוגדר. אנא פנה למנהל.")
+            return
+
+        if message.author.id in AI_COOLDOWN:
+            remaining = int(AI_COOLDOWN[message.author.id] - time.time())
+            if remaining > 0:
+                await message.reply(f"⏳ המתן עוד {remaining} שניות לפני שאלה נוספת.")
+                return
+
+        AI_COOLDOWN[message.author.id] = time.time() + 5
+
+        async with message.channel.typing():
+            response = await ask_nvidia(message.content)
+
+        if len(response) > 1900:
+            parts = [response[i:i+1900] for i in range(0, len(response), 1900)]
+            for part in parts:
+                await message.reply(part)
+        else:
+            await message.reply(response)
+        return
+
+    # ===== ספאם - הודעות חוזרות =====
     user_id = message.author.id
     now = time.time()
     clean_content = message.content.strip().lower()
@@ -1047,6 +786,7 @@ async def on_message(message: discord.Message):
                 pass
             return
 
+    # ===== קישורים אסורים =====
     if LINK_REGEX.search(message.content):
         try:
             await message.delete()
@@ -1063,6 +803,8 @@ async def on_message(message: discord.Message):
         return
 
     await bot.process_commands(message)
+
+# --- אירועים ---
 
 @bot.event
 async def on_member_join(member: discord.Member):
@@ -1109,7 +851,6 @@ async def on_ready():
     bot.add_view(IPButton())
     bot.add_view(IPPanelView())
     bot.add_view(ReviewPanelView())
-    bot.add_view(LookupPanelView())
 
     for guild in bot.guilds:
         try:
@@ -1117,7 +858,12 @@ async def on_ready():
         except discord.Forbidden:
             invites_cache[guild.id] = []
 
-    print(f'הבוט מחובר בתור {bot.user}')
+    print(f'✅ הבוט מחובר בתור {bot.user}')
+    print(f'📊 נמצא ב-{len(bot.guilds)} שרתים')
+    if NVIDIA_API_KEY:
+        print('✅ NVIDIA API Key נמצא')
+    else:
+        print('⚠️ NVIDIA API Key חסר - AI לא יעבוד')
 
 # ========== פקודות IP ==========
 
@@ -1306,4 +1052,7 @@ async def setup_ticket(ctx):
 keep_alive()
 
 TOKEN = os.environ.get("DISCORD_TOKEN")
-bot.run(TOKEN)
+if not TOKEN:
+    print("❌ DISCORD_TOKEN לא מוגדר!")
+else:
+    bot.run(TOKEN)
