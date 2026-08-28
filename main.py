@@ -7,10 +7,11 @@ from threading import Thread
 import time
 from flask import Flask
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
 import requests
+from google import genai
 
-# --- שרת WEB לשמירה על הבוט ער ב-Render ---
+# --- שרת WEB קטן לשמירה על הבוט ער ב-Render ---
 app = Flask('')
 
 @app.route('/')
@@ -33,7 +34,7 @@ HELPER_ROLE_IDS = [
 ]
 TICKET_CATEGORY_ID = 1542165598853922958
 WELCOME_CHANNEL_ID = 1542508702169571529
-REVIEWS_CHANNEL_ID = 1542508702169571529
+REVIEWS_CHANNEL_ID = 1542658327295565844  # 👈 ID של ערוץ הביקורות
 AUTO_ROLE_ID = 1540365463706669136
 
 ALLOWED_USER_IDS = [
@@ -46,7 +47,6 @@ ALLOWED_USER_IDS = [
 
 INVITES_FILE = "invites_data.json"
 TICKETS_FILE = "tickets_data.json"
-CONFIG_FILE = "config_data.json"
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -61,22 +61,24 @@ user_last_messages = {}
 
 LINK_REGEX = re.compile(r'https?://[^\s]+|discord\.gg/[^\s]+', re.IGNORECASE)
 
-# ========== ניהול הגדרות קבצים ==========
-def load_config():
-    if not os.path.exists(CONFIG_FILE):
-        return {"ai_channel_id": None, "ai_setup_msg_id": None}
-    try:
-        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {"ai_channel_id": None, "ai_setup_msg_id": None}
+# ========== אתחול מנוע ה-AI (Google Gemini) ==========
+client_ai = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
-def save_config(data):
-    try:
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=4)
-    except Exception:
-        pass
+async def ask_ai(prompt: str) -> str:
+    """פונקציה לשליחת בקשה ל-Gemini API"""
+    loop = asyncio.get_running_loop()
+    def _fetch():
+        try:
+            response = client_ai.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=prompt,
+            )
+            return response.text
+        except Exception as e:
+            print(f"AI Error: {e}")
+            return "מצטער, הייתה לי שגיאה בחיבור לשרתי ה-AI. נסה שוב מאוחר יותר!"
+            
+    return await loop.run_in_executor(None, _fetch)
 
 # ========== מערכת ביקורות (REVIEWS SYSTEM) ==========
 
@@ -100,13 +102,14 @@ class ReviewModal(discord.ui.Modal, title='✍️ כתיבת ביקורת'):
     review_text = discord.ui.TextInput(
         label='תוכן הביקורת',
         style=discord.TextStyle.paragraph,
-        placeholder='תכתוב את כל מה שתרצה על השרת והתמיכה שלנו...',
+        placeholder='תכתוב את כל מה שמי שתרצה על השרת והתמיכה שלנו...',
         min_length=5,
         max_length=1000,
         required=True
     )
 
     async def on_submit(self, interaction: discord.Interaction):
+        # בדיקת תקינות הדירוג בכוכבים
         stars_input = self.rating.value.strip()
         if not stars_input.isdigit() or not (1 <= int(stars_input) <= 5):
             await interaction.response.send_message("❌ נא להזין מספר תקין של כוכבים בין 1 ל-5!", ephemeral=True)
@@ -115,11 +118,13 @@ class ReviewModal(discord.ui.Modal, title='✍️ כתיבת ביקורת'):
         num_stars = int(stars_input)
         stars_display = "⭐" * num_stars
 
+        # מציאת ערוץ הביקורות
         reviews_channel = interaction.guild.get_channel(REVIEWS_CHANNEL_ID)
         if not reviews_channel:
             await interaction.response.send_message("❌ ערוץ הביקורות לא נמצא. אנא פנה להנהלה.", ephemeral=True)
             return
 
+        # יצירת ה-Embed של הביקורת
         embed = discord.Embed(
             title=f"⭐ ביקורת חדשה: {self.system_name.value}",
             color=discord.Color.gold(),
@@ -132,6 +137,7 @@ class ReviewModal(discord.ui.Modal, title='✍️ כתיבת ביקורת'):
         embed.set_thumbnail(url=interaction.user.display_avatar.url)
         embed.set_footer(text=f"שרת {interaction.guild.name}", icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
 
+        # שליחה לערוץ הביקורות
         await reviews_channel.send(embed=embed)
         await interaction.response.send_message("✅ תודה רבה! הביקורת שלך נשלחה בהצלחה.", ephemeral=True)
 
@@ -152,6 +158,7 @@ class ReviewPanelView(discord.ui.View):
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def setup_reviews(ctx):
+    """פקודה להעמדת פאנל כתיבת ביקורות"""
     try:
         await ctx.message.delete()
     except Exception:
@@ -210,7 +217,9 @@ class IPModal(discord.ui.Modal, title='🔍 בדיקת IP'):
     
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
+        
         ip = self.ip_input.value.strip()
+        
         await interaction.followup.send(f"🔄 בודק IP: `{ip}`...", ephemeral=True)
         
         result, success = get_ip_info(ip)
@@ -267,6 +276,7 @@ class IPModal(discord.ui.Modal, title='🔍 בדיקת IP'):
         except discord.Forbidden:
             await interaction.followup.send("❌ לא ניתן לשלוח לך DM. אנא פתח את ה-DMs שלך.", ephemeral=True)
 
+# ========== כפתור IP ==========
 class IPButton(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -349,7 +359,7 @@ def create_leaderboard_embed(guild: discord.Guild) -> discord.Embed:
 
         embed.add_field(name="דירוג צוות:", value=leaderboard_text, inline=False)
 
-    embed.set_footer(text="הנתונים מתעדכנים אוטומטית בכל פעם שאיש צוות לוקח טיקט!")
+    embed.set_footer(text="הנתונים מתעדכנים אוטומטית بكل פעם שאיש צוות לוקח טיקט!")
     return embed
 
 async def update_leaderboard(guild: discord.Guild):
@@ -616,97 +626,40 @@ class CreateTicketView(discord.ui.View):
         )
         await ticket_channel.send(embed=ticket_embed, view=TicketControlView())
 
-# ========== מערכת AI וטיימר ניקוי ==========
-
-async def ask_ai(prompt: str) -> str:
-    """פונקציה לשליחת שאלה ל-AI וקבלת תשובה"""
-    loop = asyncio.get_running_loop()
-    def _fetch():
-        try:
-            # שימוש ב-API חינמי של DuckDuckGo AI / Pollinations
-            url = f"https://text.pollinations.ai/{requests.utils.quote(prompt)}"
-            resp = requests.get(url, timeout=15)
-            if resp.status_code == 200:
-                return resp.text
-            return "מצטער, הייתה לי שגיאה בחיבור לשרתי ה-AI. נסה שוב מאוחר יותר!"
-        except Exception:
-            return "מצטער, אירעה שגיאה בעיבוד הבקשה שלך."
-            
-    return await loop.run_in_executor(None, _fetch)
-
-@tasks.loop(hours=1)
-async def ai_channel_cleanup_loop():
-    """משימה שרצה כל שעה לניקוי הערוץ והפעלת האזהרות"""
-    config = load_config()
-    channel_id = config.get("ai_channel_id")
-    setup_msg_id = config.get("ai_setup_msg_id")
-
-    if not channel_id:
-        return
-
-    channel = bot.get_channel(channel_id)
-    if not channel:
-        return
-
-    # המתנה של 55 דקות מתחילת המחזור (לפני שליחת אזהרת 5 דקות)
-    await asyncio.sleep(55 * 60)
-
-    # שליחת אזהרות בדקות 5, 4, 3, 2, 1
-    countdown_msg = None
-    for mins in range(5, 0, -1):
-        text = f"⚠️ **אזהרה:** כל היסטוריית ההודעות בערוץ עומדת להילחוק בעוד **{mins}** דקות!"
-        if countdown_msg is None:
-            countdown_msg = await channel.send(text)
-        else:
-            try:
-                await countdown_msg.edit(content=text)
-            except Exception:
-                countdown_msg = await channel.send(text)
-        await asyncio.sleep(60)
-
-    # ספירה לאחור בשניות (5 עד 1)
-    for secs in range(5, 0, -1):
-        text = f"⏳ הניקוי מתחיל בעוד **{secs}**..."
-        try:
-            await countdown_msg.edit(content=text)
-        except Exception:
-            pass
-        await asyncio.sleep(1)
-
-    # ביצוע הניקוי - מוחק את כל ההודעות פרט להודעת ה-Setup
-    def check_not_setup(m):
-        return m.id != setup_msg_id
-
-    try:
-        await channel.purge(limit=1000, check=check_not_setup)
-    except Exception as e:
-        print(f"שגיאה בניקוי ערוץ ה-AI: {e}")
-
-@ai_channel_cleanup_loop.before_loop
-async def before_cleanup_loop():
-    await bot.wait_until_ready()
-
 # --- אירוע הודעות ---
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot or not message.guild:
         return
 
-    config = load_config()
-    ai_channel_id = config.get("ai_channel_id")
-
-    # בדיקה אם ההודעה נשלחה בערוץ ה-AI
-    if ai_channel_id and message.channel.id == ai_channel_id:
-        if not message.content.startswith('!'):
-            async with message.channel.typing():
-                response = await ask_ai(message.content)
-                await message.reply(response)
-            return
-
     user_id = message.author.id
     now = time.time()
     clean_content = message.content.strip().lower()
 
+    # --- מנגנון AI בתגובה או תיוג ---
+    is_mentioned = bot.user in message.mentions
+    is_reply_to_bot = (
+        message.reference 
+        and message.reference.resolved 
+        and isinstance(message.reference.resolved, discord.Message)
+        and message.reference.resolved.author == bot.user
+    )
+
+    if is_mentioned or is_reply_to_bot:
+        ai_prompt = message.content.replace(f'<@{bot.user.id}>', '').strip()
+        if not ai_prompt:
+            ai_prompt = "שלום"
+
+        async with message.channel.typing():
+            response = await ask_ai(ai_prompt)
+            if len(response) > 2000:
+                for i in range(0, len(response), 1900):
+                    await message.reply(response[i:i+1900])
+            else:
+                await message.reply(response)
+        return
+
+    # --- מנגנון הגנה מספאם ---
     if clean_content:
         user_history = user_last_messages.get(user_id, [])
         user_history = [item for item in user_history if now - item['time'] < 60]
@@ -726,6 +679,7 @@ async def on_message(message: discord.Message):
                 pass
             return
 
+    # --- מנגנון הגנה מקישורים ---
     if LINK_REGEX.search(message.content):
         try:
             await message.delete()
@@ -795,45 +749,7 @@ async def on_ready():
         except discord.Forbidden:
             invites_cache[guild.id] = []
 
-    if not ai_channel_cleanup_loop.is_running():
-        ai_channel_cleanup_loop.start()
-
     print(f'הבוט מחובר בתור {bot.user}')
-
-# ========== פקודת setup_ai ==========
-
-@bot.command()
-@is_allowed_user()
-async def ai_setup(ctx):
-    try:
-        await ctx.message.delete()
-    except Exception:
-        pass
-
-    embed = discord.Embed(
-        title="🤖 חדר ה-AI של השרת",
-        description=(
-            "ברוכים הבאים לחדר ה-AI!\n"
-            "כאן תוכלו לשאול אותי כל שאלה, לבקש עזרה, קוד, סיכומים או סתם לדבר.\n\n"
-            "📌 **איך זה עובד?**\n"
-            "פשוט תכתבו את השאלה שלכם בצ'אט ואני אענה לכם באופן אוטומטי!\n\n"
-            "⚠️ **שימו לב:**\n"
-            "כל שעה הערוץ מתנקה באופן אוטומטי כדי לשמור על סדר ורוחב פס."
-        ),
-        color=discord.Color.purple()
-    )
-    embed.set_thumbnail(url="https://cdn-icons-png.flaticon.com/512/4712/4712027.png")
-    embed.set_footer(text="מערכת AI אוטומטית • פועל 24/7")
-
-    setup_msg = await ctx.send(embed=embed)
-
-    config = load_config()
-    config["ai_channel_id"] = ctx.channel.id
-    config["ai_setup_msg_id"] = setup_msg.id
-    save_config(config)
-
-    if not ai_channel_cleanup_loop.is_running():
-        ai_channel_cleanup_loop.start()
 
 # ========== פקודות IP ==========
 
@@ -985,11 +901,41 @@ async def setup_invites(ctx):
     )
     await ctx.send(embed=embed, view=CheckInvitesView())
 
-# --- הרצת הבוט ---
-if __name__ == "__main__":
-    keep_alive()  # הפעלת שרת ה-Web לשמירה על חיבור ב-Render
-    token = os.environ.get("DISCORD_TOKEN")  # משיכת ה-Token מתוך Environment Variable
-    if token:
-        bot.run(token)
-    else:
-        print("❌ שגיאה: לא נמצא DISCORD_TOKEN במשתני הסביבה!")
+@bot.command(name="drop", aliases=["DROP"])
+@is_allowed_user()
+async def drop_command(ctx, *, prize: str = None):
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+    if not prize:
+        warning_msg = await ctx.send("❌ יש לציין את מהות הזכייה!")
+        await asyncio.sleep(5)
+        await warning_msg.delete()
+        return
+    embed = discord.Embed(
+        title="🎁 דרופ חדש בשרת!",
+        description="מי שלוחץ ראשון על הכפתור למטה זוכה בדרופ!",
+        color=discord.Color.gold(),
+    )
+    embed.add_field(name="🏆 זכייה:", value=f"**{prize}**", inline=False)
+    await ctx.send(embed=embed, view=DropView(prize=prize))
+
+@bot.command()
+@is_allowed_user()
+async def setup_ticket(ctx):
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+    embed = discord.Embed(
+        title="🎫 מערכת תמיכה ופניות",
+        description="זקוק לעזרה? רוצה לפתוח פנייה לצוות השרת?\nלחץ על הכפתור למטה כדי לפתוח טיקט פרטי!",
+        color=discord.Color.gold(),
+    )
+    await ctx.send(embed=embed, view=CreateTicketView())
+
+keep_alive()
+
+TOKEN = os.environ.get("DISCORD_TOKEN")
+bot.run(TOKEN)
