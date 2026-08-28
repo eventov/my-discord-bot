@@ -691,9 +691,9 @@ async def on_message(message: discord.Message):
 
     await bot.process_commands(message)
 
-# ========== פונקציית עדכון הסטטוס ==========
+# ========== פונקציית עדכון הסטטוס המוגנת ==========
 async def update_bot_presence():
-    total_members = sum(guild.member_count for guild in bot.guilds if guild.member_count)
+    total_members = sum((guild.member_count or 0) for guild in bot.guilds)
     activity = discord.Activity(
         type=discord.ActivityType.listening,
         name=f"{total_members} members"
@@ -747,7 +747,7 @@ async def on_member_remove(member: discord.Member):
     except Exception:
         pass
 
-# ========== אירוע להתחברות הבוט (מוגן) ==========
+# ========== אירוע להתחברות הבוט (מוגן לחלוטין) ==========
 @bot.event
 async def on_ready():
     try:
