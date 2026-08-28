@@ -47,6 +47,7 @@ ALLOWED_USER_IDS = [
 
 INVITES_FILE = "invites_data.json"
 TICKETS_FILE = "tickets_data.json"
+SETTINGS_FILE = "settings_data.json"
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -80,6 +81,23 @@ async def ask_ai(prompt: str) -> str:
             
     return await loop.run_in_executor(None, _fetch)
 
+# ========== פונקציות שמירה והטענת הגדרות (כולל ערוץ AI) ==========
+def load_settings():
+    if not os.path.exists(SETTINGS_FILE):
+        return {"ai_channel_id": None}
+    try:
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {"ai_channel_id": None}
+
+def save_settings(data):
+    try:
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4)
+    except Exception:
+        pass
+
 # ========== מערכת ביקורות (REVIEWS SYSTEM) ==========
 
 class ReviewModal(discord.ui.Modal, title='✍️ כתיבת ביקורת'):
@@ -109,7 +127,6 @@ class ReviewModal(discord.ui.Modal, title='✍️ כתיבת ביקורת'):
     )
 
     async def on_submit(self, interaction: discord.Interaction):
-        # בדיקת תקינות הדירוג בכוכבים
         stars_input = self.rating.value.strip()
         if not stars_input.isdigit() or not (1 <= int(stars_input) <= 5):
             await interaction.response.send_message("❌ נא להזין מספר תקין של כוכבים בין 1 ל-5!", ephemeral=True)
@@ -118,13 +135,11 @@ class ReviewModal(discord.ui.Modal, title='✍️ כתיבת ביקורת'):
         num_stars = int(stars_input)
         stars_display = "⭐" * num_stars
 
-        # מציאת ערוץ הביקורות
         reviews_channel = interaction.guild.get_channel(REVIEWS_CHANNEL_ID)
         if not reviews_channel:
             await interaction.response.send_message("❌ ערוץ הביקורות לא נמצא. אנא פנה להנהלה.", ephemeral=True)
             return
 
-        # יצירת ה-Embed של הביקורת
         embed = discord.Embed(
             title=f"⭐ ביקורת חדשה: {self.system_name.value}",
             color=discord.Color.gold(),
@@ -137,7 +152,6 @@ class ReviewModal(discord.ui.Modal, title='✍️ כתיבת ביקורת'):
         embed.set_thumbnail(url=interaction.user.display_avatar.url)
         embed.set_footer(text=f"שרת {interaction.guild.name}", icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
 
-        # שליחה לערוץ הביקורות
         await reviews_channel.send(embed=embed)
         await interaction.response.send_message("✅ תודה רבה! הביקורת שלך נשלחה בהצלחה.", ephemeral=True)
 
@@ -158,7 +172,6 @@ class ReviewPanelView(discord.ui.View):
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def setup_reviews(ctx):
-    """פקודה להעמדת פאנל כתיבת ביקורות"""
     try:
         await ctx.message.delete()
     except Exception:
@@ -217,11 +230,8 @@ class IPModal(discord.ui.Modal, title='🔍 בדיקת IP'):
     
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        
         ip = self.ip_input.value.strip()
-        
         await interaction.followup.send(f"🔄 בודק IP: `{ip}`...", ephemeral=True)
-        
         result, success = get_ip_info(ip)
         
         if not success:
@@ -241,27 +251,10 @@ class IPModal(discord.ui.Modal, title='🔍 בדיקת IP'):
         )
         
         fields = [
-            ('📋 מידע כללי', 
-             f'**סוג IP:** {result["סוג IP"]}\n'
-             f'**מדינה:** {result["מדינה"]}\n'
-             f'**אזור:** {result["אזור"]}\n'
-             f'**עיר:** {result["עיר"]}\n'
-             f'**מיקוד:** {result["מיקוד"]}'),
-             
-            ('📍 מיקום', 
-             f'**קואורדינטות:** {result["קואורדינטות"]}\n'
-             f'**אזור זמן:** {result["אזור זמן"]}'),
-             
-            ('🔌 מידע על ספק', 
-             f'**ספק אינטרנט:** {result["ספק אינטרנט (ISP)"]}\n'
-             f'**ארגון:** {result["ארגון"]}\n'
-             f'**AS:** {result["AS (Autonomous System)"]}'),
-             
-            ('🛠 מידע טכני', 
-             f'**DNS Reverse:** {result["שם הפוך (DNS)"]}\n'
-             f'**חיבור סלולרי:** {result["חיבור סלולרי"]}\n'
-             f'**Proxy/VPN:** {result["Proxy/VPN"]}\n'
-             f'**חוות שרתים:** {result["חוות שרתים"]}')
+            ('📋 מידע כללי', f'**סוג IP:** {result["סוג IP"]}\n**מדינה:** {result["מדינה"]}\n**אזור:** {result["אזור"]}\n**עיר:** {result["עיר"]}\n**מיקוד:** {result["מיקוד"]}'),
+            ('📍 מיקום', f'**קואורדינטות:** {result["קואורדינטות"]}\n**אזור זמן:** {result["אזור זמן"]}'),
+            ('🔌 מידע על ספק', f'**ספק אינטרנט:** {result["ספק אינטרנט (ISP)"]}\n**ארגון:** {result["ארגון"]}\n**AS:** {result["AS (Autonomous System)"]}'),
+            ('🛠 מידע טכני', f'**DNS Reverse:** {result["שם הפוך (DNS)"]}\n**חיבור סלולרי:** {result["חיבור סלולרי"]}\n**Proxy/VPN:** {result["Proxy/VPN"]}\n**חוות שרתים:** {result["חוות שרתים"]}')
         ]
         
         for name, value in fields:
@@ -276,7 +269,6 @@ class IPModal(discord.ui.Modal, title='🔍 בדיקת IP'):
         except discord.Forbidden:
             await interaction.followup.send("❌ לא ניתן לשלוח לך DM. אנא פתח את ה-DMs שלך.", ephemeral=True)
 
-# ========== כפתור IP ==========
 class IPButton(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -636,7 +628,11 @@ async def on_message(message: discord.Message):
     now = time.time()
     clean_content = message.content.strip().lower()
 
-    # --- מנגנון AI בתגובה או תיוג ---
+    # טעינת הגדרת ערוץ ה-AI
+    settings = load_settings()
+    ai_channel_id = settings.get("ai_channel_id")
+
+    # בדיקות תיוג/תגובה/חדר AI
     is_mentioned = bot.user in message.mentions
     is_reply_to_bot = (
         message.reference 
@@ -644,8 +640,9 @@ async def on_message(message: discord.Message):
         and isinstance(message.reference.resolved, discord.Message)
         and message.reference.resolved.author == bot.user
     )
+    is_ai_channel = (ai_channel_id is not None and message.channel.id == ai_channel_id)
 
-    if is_mentioned or is_reply_to_bot:
+    if is_mentioned or is_reply_to_bot or is_ai_channel:
         ai_prompt = message.content.replace(f'<@{bot.user.id}>', '').strip()
         if not ai_prompt:
             ai_prompt = "שלום"
@@ -750,6 +747,27 @@ async def on_ready():
             invites_cache[guild.id] = []
 
     print(f'הבוט מחובר בתור {bot.user}')
+
+# ========== פקודת הגדרת חדר AI ==========
+
+@bot.command(name='setup_ai', aliases=['ai_setup'])
+@is_allowed_user()
+async def setup_ai_channel(ctx):
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+
+    settings = load_settings()
+    settings["ai_channel_id"] = ctx.channel.id
+    save_settings(settings)
+
+    embed = discord.Embed(
+        title="🤖 ערוץ AI הוגדר בהצלחה!",
+        description=f"מהיום הערוץ {ctx.channel.mention} מוגדר כערוץ AI רשמי.\nכל הודעה שנשלחת כאן תקבל מענה אוטומטי מה-AI!",
+        color=discord.Color.green()
+    )
+    await ctx.send(embed=embed)
 
 # ========== פקודות IP ==========
 
