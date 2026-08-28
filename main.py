@@ -698,6 +698,15 @@ async def on_message(message: discord.Message):
 
     await bot.process_commands(message)
 
+# פונקציית עזר לעדכון הסטטוס
+async def update_bot_presence():
+    total_members = sum(guild.member_count for guild in bot.guilds if guild.member_count)
+    activity = discord.Activity(
+        type=discord.ActivityType.listening,
+        name=f"{total_members} members"
+    )
+    await bot.change_presence(activity=activity)
+
 @bot.event
 async def on_member_join(member: discord.Member):
     role = member.guild.get_role(AUTO_ROLE_ID)
@@ -733,6 +742,14 @@ async def on_member_join(member: discord.Member):
         )
         await welcome_channel.send(content=f"שלום לכולם, תברכו את {member.mention}!", embed=embed)
 
+    # עדכון מספר המשתמשים בסטטוס בעת הצטרפות
+    await update_bot_presence()
+
+@bot.event
+async def on_member_remove(member: discord.Member):
+    # עדכון מספר המשתמשים בסטטוס בעת עזיבה
+    await update_bot_presence()
+
 @bot.event
 async def on_ready():
     bot.add_view(CreateTicketView())
@@ -749,6 +766,9 @@ async def on_ready():
             invites_cache[guild.id] = await guild.invites()
         except discord.Forbidden:
             invites_cache[guild.id] = []
+
+    # הגדרת הסטטוס בהתחברות הבוט
+    await update_bot_presence()
 
     print(f'הבוט מחובר בתור {bot.user}')
 
