@@ -92,7 +92,8 @@ async def ask_nvidia(prompt: str, model: str = "meta/llama-3.1-8b-instruct"):
                     data = await resp.json()
                     return data["choices"][0]["message"]["content"]
                 else:
-                    return f"❌ שגיאה מה-API: {resp.status}"
+                    error_text = await resp.text()
+                    return f"❌ שגיאה {resp.status}: {error_text[:200]}"
     except Exception as e:
         return f"❌ שגיאה: {str(e)}"
 
