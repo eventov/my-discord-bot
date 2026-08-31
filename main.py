@@ -37,12 +37,14 @@ WELCOME_CHANNEL_ID = 1542508702169571529
 REVIEWS_CHANNEL_ID = 1542658327295565844
 AUTO_ROLE_ID = 1540365463706669136
 
+# רשימת משתמשים שיכולים לשלוח קישורים ללא ענישה (הוסף כאן את ה-ID הרצויים)
 ALLOWED_USER_IDS = [
     1228062821690904748,
     1519071293519953974,
     1359539374496284917,
-    000000000000000000,
-    000000000000000000,
+    # הוסף כאן שני מזהים לדוגמה:
+    # 123456789012345678,
+    # 987654321098765432,
 ]
 
 INVITES_FILE = "invites_data.json"
@@ -56,7 +58,7 @@ intents.members = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 user_cooldowns = {}
-user_link_warnings = {}
+user_link_warnings = {}   # מונה אזהרות על קישורים (לכל משתמש)
 invites_cache = {}
 user_last_messages = {}
 
@@ -619,7 +621,7 @@ class CreateTicketView(discord.ui.View):
         )
         await ticket_channel.send(embed=ticket_embed, view=TicketControlView())
 
-# --- אירוע הודעות ---
+# --- אירוע הודעות (עם מערכת חסימת קישורים וספאם משודרגת) ---
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot or not message.guild:
@@ -655,6 +657,7 @@ async def on_message(message: discord.Message):
                 await message.reply(response)
         return
 
+    # --- מניעת ספאם (הודעות חוזרות) ---
     if clean_content:
         user_history = user_last_messages.get(user_id, [])
         user_history = [item for item in user_history if now - item['time'] < 60]
@@ -674,20 +677,90 @@ async def on_message(message: discord.Message):
                 pass
             return
 
+    # --- טיפול בקישורים (עם הסלמה, DM והחזרה אוטומטית מבאן) ---
     if LINK_REGEX.search(message.content):
+        # בדיקה אם המשתמש מורשה (ברשימה או מנהל)
+        if message.author.id in ALLOWED_USER_IDS or message.author.guild_permissions.administrator:
+            # מורשה – לא מענישים, ממשיכים לעיבוד פקודות
+            await bot.process_commands(message)
+            return
+
+        # מחיקת ההודעה
         try:
             await message.delete()
         except Exception:
             pass
+
+        # עדכון מונה אזהרות
         current_warnings = user_link_warnings.get(user_id, 0) + 1
         user_link_warnings[user_id] = current_warnings
-        duration_minutes = 5 if current_warnings == 1 else (10 if current_warnings == 2 else 1440)
-        timeout_duration = datetime.now(timezone.utc) + timedelta(minutes=duration_minutes)
+
+        # קביעת סוג העונש ומשך הזמן (בדקות)
+        if current_warnings == 1:
+            duration_minutes = 5
+            penalty_type = "timeout"
+        elif current_warnings == 2:
+            duration_minutes = 10
+            penalty_type = "timeout"
+        else:  # current_warnings >= 3
+            duration_minutes = 1440  # 24 שעות
+            penalty_type = "ban"
+
+        # שליחת הודעה פרטית מפורטת למשתמש
         try:
-            await message.author.timeout(timeout_duration, reason="שליחת קישורים")
-        except Exception:
-            pass
-        return
+            dm_embed = discord.Embed(
+                title="⚠️ אזהרה על שליחת קישור",
+                description=f"קיבלת אזהרה בשרת **{message.guild.name}**",
+                color=discord.Color.red()
+            )
+            dm_embed.add_field(
+                name="📝 ההודעה שנשלחה",
+                value=message.content[:1000] or "(ריק)",
+                inline=False
+            )
+            if penalty_type == "timeout":
+                dm_embed.add_field(
+                    name="⏳ משך העונש",
+                    value=f"{duration_minutes} דקות (השתקת צ'אט)",
+                    inline=False
+                )
+                dm_embed.add_field(
+                    name="⚠️ הערה",
+                    value="אם תשלח קישור שוב, העונש יעלה ל-10 דקות, ובפעם השלישית תקבל הרחקה (ban) ל-24 שעות.",
+                    inline=False
+                )
+            else:  # ban
+                dm_embed.add_field(
+                    name="⛔ עונש חמור",
+                    value="הורחקת מהשרת ל-24 שעות (ban). לאחר הזמן תוכל לחזר אוטומטית.",
+                    inline=False
+                )
+            await message.author.send(embed=dm_embed)
+        except discord.Forbidden:
+            pass  # לא ניתן לשלוח DM
+
+        # ביצוע העונש בפועל
+        if penalty_type == "timeout":
+            timeout_duration = datetime.now(timezone.utc) + timedelta(minutes=duration_minutes)
+            try:
+                await message.author.timeout(timeout_duration, reason="שליחת קישורים")
+            except Exception:
+                pass
+        else:  # ban
+            try:
+                await message.guild.ban(message.author, reason="שליחת קישורים (אזהרה שלישית)", delete_message_days=1)
+                # תזמון ביטול הבאן לאחר 24 שעות
+                async def unban_after_24h():
+                    await asyncio.sleep(86400)  # 24 שעות
+                    try:
+                        await message.guild.unban(message.author, reason="תום תקופת הבאן")
+                    except discord.NotFound:
+                        pass  # המשתמש כבר לא בשרת או שהבאן בוטל
+                asyncio.create_task(unban_after_24h())
+            except discord.Forbidden:
+                pass  # אין הרשאה לבאנ
+
+        return  # לא להמשיך לעיבוד פקודות
 
     await bot.process_commands(message)
 
