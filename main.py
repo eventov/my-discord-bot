@@ -37,7 +37,7 @@ WELCOME_CHANNEL_ID = 1557456369429385318
 REVIEWS_CHANNEL_ID = 1557480725404590193
 AUTO_ROLE_ID = 1540365463706669136
 
-# רשימת משתמשים שיכולים לשלוח קישורים ללא ענישה (הוסף כאן את ה-ID הרצויים)
+# רשימת משתמשים שיכולים לשלוח קישורים ללא ענישה
 ALLOWED_USER_IDS = [
     1228062821690904748,
     1519071293519953974,
@@ -63,7 +63,7 @@ intents.members = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 user_cooldowns = {}
-user_link_warnings = {}    # מונה אזהרות על קישורים (לכל משתמש)
+user_link_warnings = {}    
 invites_cache = {}
 user_last_messages = {}
 
@@ -214,7 +214,6 @@ class DesignModal(discord.ui.Modal, title="פרטי העיצוב"):
 
         designer_member = guild.get_member(self.designer_id)
         
-        # הרשאות: רק המשתמש, המעצב והבוט/אדמינים יכולים לראות את החדר
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
             interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
@@ -224,7 +223,6 @@ class DesignModal(discord.ui.Modal, title="פרטי העיצוב"):
         if designer_member:
             overwrites[designer_member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
 
-        # שם הטיקט: ticket-<שם_המעצב> באנגלית
         channel_name = f"ticket-{self.designer_name}"
 
         ticket_channel = await guild.create_text_channel(
@@ -272,7 +270,6 @@ class DesignBuyView(discord.ui.View):
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def setup_designs(ctx):
-    """פקודה לשליחת פאנל קניית העיצובים לשרת"""
     try:
         await ctx.message.delete()
     except Exception:
@@ -467,81 +464,6 @@ def is_staff(user: discord.Member) -> bool:
     user_role_ids = [r.id for r in user.roles]
     return any(role_id in user_role_ids for role_id in HELPER_ROLE_IDS)
 
-class SendDMModal(discord.ui.Modal, title="שליחת הודעה פרטית למשתמש"):
-    user_id_input = discord.ui.TextInput(
-        label="ID של המשתמש",
-        placeholder="הכנס את ה-ID של המשתמש כאן...",
-        required=True,
-        max_length=20
-    )
-
-    message_input = discord.ui.TextInput(
-        label="מה לשלוח?",
-        style=discord.TextStyle.paragraph,
-        placeholder="כתוב את ההודעה שברצונך לשלוח...",
-        required=False,
-        max_length=2000
-    )
-
-    async def on_submit(self, interaction: discord.Interaction):
-        try:
-            target_user_id = int(self.user_id_input.value.strip())
-            target_user = await interaction.client.fetch_user(target_user_id)
-        except ValueError:
-            await interaction.response.send_message("❌ ה-ID שהכנסת אינו תקין!", ephemeral=True)
-            return
-        except discord.NotFound:
-            await interaction.response.send_message("❌ לא נמצא משתמש עם ה-ID הזה!", ephemeral=True)
-            return
-
-        message_text = self.message_input.value or ""
-
-        await interaction.response.send_message(
-            "⏳ **רוצה לצרף קובץ/תמונה להודעה?**\n"
-            "שלח עכשיו את הקובץ בצ'אט בתוך **30 שניות** (או כתוב `no` / חכה לסיום הזמן כדי לשלוח רק טקסט).",
-            ephemeral=True
-        )
-
-        files_to_send = []
-
-        def check(m):
-            return m.author.id == interaction.user.id and m.channel.id == interaction.channel.id
-
-        try:
-            msg = await interaction.client.wait_for('message', timeout=30.0, check=check)
-            if msg.attachments:
-                for attachment in msg.attachments:
-                    file = await attachment.to_file()
-                    files_to_send.append(file)
-                try:
-                    await msg.delete()
-                except Exception:
-                    pass
-            elif msg.content.lower() == 'no':
-                try:
-                    await msg.delete()
-                except Exception:
-                    pass
-        except asyncio.TimeoutError:
-            pass
-
-        if not message_text and not files_to_send:
-            await interaction.followup.send("❌ לא הזנת טקסט ולא צירפת קובץ, השליחה בוטלה.", ephemeral=True)
-            return
-
-        embed = discord.Embed(
-            title="📩 קיבלת הודעה מצוות הנהלת השרת",
-            description=message_text if message_text else None,
-            color=discord.Color.blue()
-        )
-        embed.set_footer(text=f"נשלח משרת {interaction.guild.name}")
-
-        try:
-            await target_user.send(embed=embed, files=files_to_send)
-            await interaction.followup.send(f"✅ ההודעה (והקבצים) נשלחו בהצלחה ל-{target_user.mention}!", ephemeral=True)
-        except discord.Forbidden:
-            await interaction.followup.send(f"❌ המשתמש {target_user.mention} סגר את ההודעות הפרטיות שלו.", ephemeral=True)
-
 class TicketControlView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -676,7 +598,7 @@ async def on_message(message: discord.Message):
                 pass
             return
 
-    # --- טיפול בקישורים (עם הסלמה, DM והחזרה אוטומטית מבאן) ---
+    # --- טיפול בקישורים ---
     if LINK_REGEX.search(message.content):
         if message.author.id in ALLOWED_USER_IDS or message.author.guild_permissions.administrator:
             await bot.process_commands(message)
@@ -715,11 +637,6 @@ async def on_message(message: discord.Message):
                 dm_embed.add_field(
                     name="⏳ משך העונש",
                     value=f"{duration_minutes} דקות (השתקת צ'אט)",
-                    inline=False
-                )
-                dm_embed.add_field(
-                    name="⚠️ הערה",
-                    value="אם תשלח קישור שוב, העונש יעלה ל-10 דקות, ובפעם השלישית תקבל הרחקה (ban) ל-24 שעות.",
                     inline=False
                 )
             else: 
@@ -810,7 +727,17 @@ async def on_member_remove(member: discord.Member):
     except Exception:
         pass
 
+@bot.event
+async def on_ready():
+    print(f"Logged in as {bot.user.name} (ID: {bot.user.id})")
+    bot.add_view(ReviewPanelView())
+    bot.add_view(DesignBuyView())
+    bot.add_view(CreateTicketView())
+    bot.add_view(TicketControlView())
+    await update_bot_presence()
+
 # ==========================================
-# הפעלת הבוט (שמור על הטוקן שלך מוגן)
-# keep_alive()  # הפעל את זה אם אתה בשרת כמו Render
-# bot.run("YOUR_BOT_TOKEN")
+# הפעלת הבוט (קורא את הטוקן ממשתני הסביבה ב-Render)
+# ==========================================
+keep_alive()  # הפעלת שרת הווב כדי שלא יסגר ב-Render
+bot.run(os.environ.get("DISCORD_TOKEN"))
