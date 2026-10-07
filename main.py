@@ -34,7 +34,8 @@ HELPER_ROLE_IDS = [
 ]
 TICKET_CATEGORY_ID = 1557470704016818267
 WELCOME_CHANNEL_ID = 1557456369429385318
-REVIEWS_CHANNEL_ID = 1557480725404590193
+REVIEWS_CHANNEL_ID = 1557480725404590193       # ערוץ הביקורות הכלליות
+DESIGN_REVIEWS_CHANNEL_ID = 1557489019825168455 # 📌 כאן תוכל לשים את המזהה של ערוץ ביקורות העיצובים החדש שלך!
 AUTO_ROLE_ID = 1540365463706669136
 
 # רשימת משתמשים שיכולים לשלוח קישורים ללא ענישה
@@ -45,10 +46,9 @@ ALLOWED_USER_IDS = [
 ]
 
 # ==================== הגדרות מעצבים לקניית עיצובים ====================
-# המפתח (Key) הוא ה-ID של דיסקורד של המעצב, והערך הוא השם שלו (שיופיע בשם הטיקט באנגלית).
 DESIGNERS = {
-    1291798625554534464: "🪖OSCORE🪖",      # החלף ב-ID האמיתי של המעצב הראשון
-    987051349969616986: "Dondon",    # החלף ב-ID האמיתי של המעצב השני
+    1291798625554534464: "🪖OSCORE🪖",
+    987051349969616986: "Dondon",
 }
 # ====================================================================
 
@@ -109,7 +109,7 @@ def save_settings(data):
     except Exception:
         pass
 
-# ========== מערכת ביקורות ==========
+# ========== מערכת ביקורות רגילה ==========
 class ReviewModal(discord.ui.Modal, title='✍️ כתיבת ביקורת'):
     system_name = discord.ui.TextInput(
         label='שם המערכת / השירות',
@@ -130,7 +130,7 @@ class ReviewModal(discord.ui.Modal, title='✍️ כתיבת ביקורת'):
     review_text = discord.ui.TextInput(
         label='תוכן הביקורת',
         style=discord.TextStyle.paragraph,
-        placeholder='תכתוב את כל מה שמי שתרצה על השרת והתמיכה שלנו...',
+        placeholder='תכתוב את כל מה שתרצה על השרת והתמיכה שלנו...',
         min_length=5,
         max_length=1000,
         required=True
@@ -193,6 +193,74 @@ async def setup_reviews(ctx):
     embed.set_footer(text="כל הביקורות עוזרות לנו להשתפר!")
     await ctx.send(embed=embed, view=ReviewPanelView())
 
+# ========== מערכת ביקורות ייעודית לעיצובים (נשלחת לחדר ביקורות העיצובים) ==========
+class DesignReviewModal(discord.ui.Modal, title="✨ מה אתה אומר על העיצוב?"):
+    rating = discord.ui.TextInput(
+        label="דירוג (בין 1 ל-5 כוכבים ⭐)",
+        placeholder="לדוגמה: 5",
+        min_length=1,
+        max_length=1,
+        required=True
+    )
+    feedback = discord.ui.TextInput(
+        label="חוות דעת על העיצוב",
+        style=discord.TextStyle.paragraph,
+        placeholder="כתוב כאן את דעתך על השירות והעיצוב שקיבלת...",
+        required=True,
+        max_length=1000
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        stars_input = self.rating.value.strip()
+        if not stars_input.isdigit() or not (1 <= int(stars_input) <= 5):
+            await interaction.response.send_message("❌ נא להזין מספר תקין בין 1 ל-5!", ephemeral=True)
+            return
+
+        num_stars = int(stars_input)
+        stars_display = "⭐" * num_stars
+
+        # שולח לערוץ ביקורות העיצובים הייעודי
+        design_reviews_channel = interaction.guild.get_channel(DESIGN_REVIEWS_CHANNEL_ID)
+        
+        embed = discord.Embed(
+            title="🎨 ביקורת עיצוב חדשה",
+            color=discord.Color.gold(),
+            timestamp=discord.utils.utcnow()
+        )
+        embed.add_field(name="👤 לקוח:", value=interaction.user.mention, inline=True)
+        embed.add_field(name="⭐ דירוג:", value=f"{stars_display} ({num_stars}/5)", inline=True)
+        embed.add_field(name="📝 חוות דעת:", value=self.feedback.value, inline=False)
+        embed.set_thumbnail(url=interaction.user.display_avatar.url)
+        embed.set_footer(text=f"נשלח מטיקט עיצובים")
+
+        if design_reviews_channel:
+            await design_reviews_channel.send(embed=embed)
+            await interaction.response.send_message("✅ תודה רבה! חוות הדעת שלך על העיצוב נשלחה בהצלחה לערוץ ביקורות העיצובים.", ephemeral=True)
+        else:
+            await interaction.response.send_message("✅ חוות הדעת נקלטה (אך ערוץ ביקורות העיצובים אינו מוגדר נכון במערכת).", ephemeral=True)
+
+class DesignReviewButtonView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="כתוב חוות דעת לעיצוב 📝", style=discord.ButtonStyle.success, custom_id="design_review_btn")
+    async def open_modal(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(DesignReviewModal())
+
+# ========== כפתור סגירת טיקט עיצוב ==========
+class DesignTicketControlView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="סגור טיקט 🔒", style=discord.ButtonStyle.danger, custom_id="close_design_ticket_btn")
+    async def close_design_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("הטיקט ייסגר בעוד 5 שניות...", ephemeral=True)
+        await asyncio.sleep(5)
+        try:
+            await interaction.channel.delete()
+        except Exception:
+            pass
+
 # ========== מערכת קניית עיצובים ==========
 class DesignModal(discord.ui.Modal, title="פרטי העיצוב"):
     def __init__(self, designer_id: int, designer_name: str):
@@ -238,8 +306,8 @@ class DesignModal(discord.ui.Modal, title="פרטי העיצוב"):
             color=discord.Color.blue()
         )
         ping_text = f"{interaction.user.mention} {designer_member.mention if designer_member else ''}"
-        await ticket_channel.send(content=ping_text, embed=embed)
-
+        
+        await ticket_channel.send(content=ping_text, embed=embed, view=DesignTicketControlView())
         await interaction.response.send_message(f"הטיקט שלך נפתח בהצלחה! עבור אליו כאן: {ticket_channel.mention}", ephemeral=True)
 
 class DesignerSelect(discord.ui.Select):
@@ -281,6 +349,21 @@ async def setup_designs(ctx):
         color=discord.Color.purple()
     )
     await ctx.send(embed=embed, view=DesignBuyView())
+
+# --- פקודת מעצב: !reviewed ---
+@bot.command(name="reviewed")
+async def reviewed(ctx):
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+
+    embed = discord.Embed(
+        title="✨ מה אתה אומר על העיצוב?",
+        description="תודה שקנית אצלנו! נשמח לשמוע את חוות דעתך על העיצוב באמצעות לחיצה על הכפתור למטה.",
+        color=discord.Color.green()
+    )
+    await ctx.send(embed=embed, view=DesignReviewButtonView())
 
 # ========== פונקציות IP ==========
 def get_ip_info(ip):
@@ -734,6 +817,8 @@ async def on_ready():
     bot.add_view(DesignBuyView())
     bot.add_view(CreateTicketView())
     bot.add_view(TicketControlView())
+    bot.add_view(DesignReviewButtonView())
+    bot.add_view(DesignTicketControlView())
     await update_bot_presence()
 
 # ==========================================
