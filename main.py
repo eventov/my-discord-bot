@@ -42,10 +42,15 @@ ALLOWED_USER_IDS = [
     1228062821690904748,
     1519071293519953974,
     1359539374496284917,
-    # הוסף כאן שני מזהים לדוגמה:
-    # 123456789012345678,
-    # 987654321098765432,
 ]
+
+# ==================== הגדרות מעצבים לקניית עיצובים ====================
+# המפתח (Key) הוא ה-ID של דיסקורד של המעצב, והערך הוא השם שלו (שיופיע בשם הטיקט באנגלית).
+DESIGNERS = {
+    123456789012345678: "dan",      # החלף ב-ID האמיתי של המעצב הראשון
+    987654321098765432: "david",    # החלף ב-ID האמיתי של המעצב השני
+}
+# ====================================================================
 
 INVITES_FILE = "invites_data.json"
 TICKETS_FILE = "tickets_data.json"
@@ -58,7 +63,7 @@ intents.members = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 user_cooldowns = {}
-user_link_warnings = {}   # מונה אזהרות על קישורים (לכל משתמש)
+user_link_warnings = {}    # מונה אזהרות על קישורים (לכל משתמש)
 invites_cache = {}
 user_last_messages = {}
 
@@ -160,7 +165,6 @@ class ReviewModal(discord.ui.Modal, title='✍️ כתיבת ביקורת'):
         await reviews_channel.send(embed=embed)
         await interaction.response.send_message("✅ תודה רבה! הביקורת שלך נשלחה בהצלחה.", ephemeral=True)
 
-
 class ReviewPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -172,7 +176,6 @@ class ReviewPanelView(discord.ui.View):
     )
     async def open_review_modal(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(ReviewModal())
-
 
 @bot.command()
 @commands.has_permissions(administrator=True)
@@ -189,6 +192,98 @@ async def setup_reviews(ctx):
     )
     embed.set_footer(text="כל הביקורות עוזרות לנו להשתפר!")
     await ctx.send(embed=embed, view=ReviewPanelView())
+
+# ========== מערכת קניית עיצובים ==========
+class DesignModal(discord.ui.Modal, title="פרטי העיצוב"):
+    def __init__(self, designer_id: int, designer_name: str):
+        super().__init__()
+        self.designer_id = designer_id
+        self.designer_name = designer_name
+
+    design_prompt = discord.ui.TextInput(
+        label="מה אתה רוצה בעיצוב?",
+        style=discord.TextStyle.paragraph,
+        placeholder="תאר את העיצוב שאתה רוצה, צבעים, בסגנון וכו'...",
+        required=True,
+        max_length=1000,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        guild = interaction.guild
+        category = guild.get_channel(TICKET_CATEGORY_ID) or interaction.channel.category
+
+        designer_member = guild.get_member(self.designer_id)
+        
+        # הרשאות: רק המשתמש, המעצב והבוט/אדמינים יכולים לראות את החדר
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+            bot.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+        }
+
+        if designer_member:
+            overwrites[designer_member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+
+        # שם הטיקט: ticket-<שם_המעצב> באנגלית
+        channel_name = f"ticket-{self.designer_name}"
+
+        ticket_channel = await guild.create_text_channel(
+            name=channel_name,
+            category=category,
+            overwrites=overwrites,
+            topic=f"Design ticket for {interaction.user.id} with designer {self.designer_name}"
+        )
+
+        embed = discord.Embed(
+            title="🎨 טיקט עיצוב חדש נפתח!",
+            description=f"**לקוח:** {interaction.user.mention}\n**מעצב:** {designer_member.mention if designer_member else self.designer_name}\n\n**מה הלקוח ביקש:**\n{self.design_prompt.value}",
+            color=discord.Color.blue()
+        )
+        ping_text = f"{interaction.user.mention} {designer_member.mention if designer_member else ''}"
+        await ticket_channel.send(content=ping_text, embed=embed)
+
+        await interaction.response.send_message(f"הטיקט שלך נפתח בהצלחה! עבור אליו כאן: {ticket_channel.mention}", ephemeral=True)
+
+class DesignerSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label=name, value=str(discord_id), description=f"הזמן עיצוב אצל {name}")
+            for discord_id, name in DESIGNERS.items()
+        ]
+        super().__init__(placeholder="בחר מעצב רצוי...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        selected_designer_id = int(self.values[0])
+        selected_designer_name = DESIGNERS.get(selected_designer_id, "designer")
+        
+        modal = DesignModal(designer_id=selected_designer_id, designer_name=selected_designer_name)
+        await interaction.response.send_modal(modal)
+
+class DesignBuyView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="קניית עיצובים 🛒", style=discord.ButtonStyle.green, custom_id="buy_design_btn")
+    async def buy_design(self, interaction: discord.Interaction, button: discord.ui.Button):
+        view = discord.ui.View()
+        view.add_item(DesignerSelect())
+        await interaction.response.send_message("בחר את המעצב שאצלו תרצה לקנות עיצוב:", view=view, ephemeral=True)
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def setup_designs(ctx):
+    """פקודה לשליחת פאנל קניית העיצובים לשרת"""
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+
+    embed = discord.Embed(
+        title="🛒 מערכת רכישת עיצובים",
+        description="רוצה עיצוב מותאם אישית? לחץ על הכפתור למטה כדי לבחור מעצב ולפתח טיקט אישי פרטי!",
+        color=discord.Color.purple()
+    )
+    await ctx.send(embed=embed, view=DesignBuyView())
 
 # ========== פונקציות IP ==========
 def get_ip_info(ip):
@@ -272,14 +367,6 @@ class IPModal(discord.ui.Modal, title='🔍 בדיקת IP'):
             await interaction.followup.send("✅ המידע נשלח לך ב-DM!", ephemeral=True)
         except discord.Forbidden:
             await interaction.followup.send("❌ לא ניתן לשלוח לך DM. אנא פתח את ה-DMs שלך.", ephemeral=True)
-
-class IPButton(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label='🔍 בדוק IP', style=discord.ButtonStyle.primary, emoji='🌐')
-    async def ip_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(IPModal())
 
 # --- פונקציות עזר ונתונים ---
 def load_invites_data():
@@ -380,22 +467,6 @@ def is_staff(user: discord.Member) -> bool:
     user_role_ids = [r.id for r in user.roles]
     return any(role_id in user_role_ids for role_id in HELPER_ROLE_IDS)
 
-def is_allowed_user():
-    async def predicate(ctx):
-        if ctx.author.id in ALLOWED_USER_IDS or ctx.author.guild_permissions.administrator:
-            return True
-        try:
-            await ctx.message.delete()
-        except Exception:
-            pass
-        embed = discord.Embed(description="מה אתה מנסה בכלל", color=discord.Color.blue())
-        try:
-            await ctx.author.send(embed=embed)
-        except discord.Forbidden:
-            pass
-        return False
-    return commands.check(predicate)
-
 class SendDMModal(discord.ui.Modal, title="שליחת הודעה פרטית למשתמש"):
     user_id_input = discord.ui.TextInput(
         label="ID של המשתמש",
@@ -470,78 +541,6 @@ class SendDMModal(discord.ui.Modal, title="שליחת הודעה פרטית למ
             await interaction.followup.send(f"✅ ההודעה (והקבצים) נשלחו בהצלחה ל-{target_user.mention}!", ephemeral=True)
         except discord.Forbidden:
             await interaction.followup.send(f"❌ המשתמש {target_user.mention} סגר את ההודעות הפרטיות שלו.", ephemeral=True)
-
-class DMPanelView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(
-        label="שלח הודעה פרטית למשתמש ✉️",
-        style=discord.ButtonStyle.blurple,
-        custom_id="send_dm_btn"
-    )
-    async def open_dm_modal(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not (interaction.user.id in ALLOWED_USER_IDS or interaction.user.guild_permissions.administrator):
-            await interaction.response.send_message("אין לך הרשאה להשתמש בפאנל זה!", ephemeral=True)
-            return
-
-        await interaction.response.send_modal(SendDMModal())
-
-class IPPanelView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(
-        label="🔍 בדוק IP",
-        style=discord.ButtonStyle.primary,
-        custom_id="ip_check_btn",
-        emoji="🌐"
-    )
-    async def open_ip_modal(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not (interaction.user.id in ALLOWED_USER_IDS or interaction.user.guild_permissions.administrator):
-            await interaction.response.send_message("אין לך הרשאה להשתמש בפאנל זה!", ephemeral=True)
-            return
-
-        await interaction.response.send_modal(IPModal())
-
-class CheckInvitesView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="לחץ פה כדי לראות כמה אנשים הבאת! 📩", style=discord.ButtonStyle.green, custom_id="check_invites_btn")
-    async def check_invites(self, interaction: discord.Interaction, button: discord.ui.Button):
-        user = interaction.user
-        total_invites = get_invite_count(user.id)
-        dm_embed = discord.Embed(
-            title="📊 נתוני ההזמנות שלך",
-            description=f"שלום {user.display_name},\nבדיקת ההזמנות שלך בשרת **{interaction.guild.name}**:",
-            color=discord.Color.blue(),
-        )
-        dm_embed.add_field(name="✉️ סך הכל אנשים שהבאת:", value=f"**{total_invites}** משתמשים", inline=False)
-        try:
-            await user.send(embed=dm_embed)
-            await interaction.response.send_message("📩 נתוני ההזמנות שלך נשלחו אליך בהודעה פרטית!", ephemeral=True)
-        except discord.Forbidden:
-            await interaction.response.send_message(f"❌ לא הצלחנו לשלוח לך הודעה פרטית. יש לך כרגע **{total_invites}** הזמנות.", ephemeral=True)
-
-class DropView(discord.ui.View):
-    def __init__(self, prize: str = ""):
-        super().__init__(timeout=None)
-        self.prize = prize
-        self.claimed = False
-
-    @discord.ui.button(label="לקחת זכייה 🎁", style=discord.ButtonStyle.blurple, custom_id="claim_drop_btn")
-    async def claim_drop(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.claimed:
-            await interaction.response.send_message("הדרופ הזה כבר נלקח!", ephemeral=True)
-            return
-        self.claimed = True
-        button.style = discord.ButtonStyle.green
-        button.label = f"נלקח על ידי {interaction.user.display_name} 🎉"
-        button.disabled = True
-        await interaction.response.edit_message(view=self)
-        ticket_link = "https://discord.com/channels/1539658262046048349/1542157535514075328"
-        await interaction.followup.send(f"🎉 {interaction.user.mention} זכית בדרופ!\nתפתח טיקט פה: {ticket_link}")
 
 class TicketControlView(discord.ui.View):
     def __init__(self):
@@ -679,34 +678,28 @@ async def on_message(message: discord.Message):
 
     # --- טיפול בקישורים (עם הסלמה, DM והחזרה אוטומטית מבאן) ---
     if LINK_REGEX.search(message.content):
-        # בדיקה אם המשתמש מורשה (ברשימה או מנהל)
         if message.author.id in ALLOWED_USER_IDS or message.author.guild_permissions.administrator:
-            # מורשה – לא מענישים, ממשיכים לעיבוד פקודות
             await bot.process_commands(message)
             return
 
-        # מחיקת ההודעה
         try:
             await message.delete()
         except Exception:
             pass
 
-        # עדכון מונה אזהרות
         current_warnings = user_link_warnings.get(user_id, 0) + 1
         user_link_warnings[user_id] = current_warnings
 
-        # קביעת סוג העונש ומשך הזמן (בדקות)
         if current_warnings == 1:
             duration_minutes = 5
             penalty_type = "timeout"
         elif current_warnings == 2:
             duration_minutes = 10
             penalty_type = "timeout"
-        else:  # current_warnings >= 3
-            duration_minutes = 1440  # 24 שעות
+        else: 
+            duration_minutes = 1440 
             penalty_type = "ban"
 
-        # שליחת הודעה פרטית מפורטת למשתמש
         try:
             dm_embed = discord.Embed(
                 title="⚠️ אזהרה על שליחת קישור",
@@ -729,42 +722,39 @@ async def on_message(message: discord.Message):
                     value="אם תשלח קישור שוב, העונש יעלה ל-10 דקות, ובפעם השלישית תקבל הרחקה (ban) ל-24 שעות.",
                     inline=False
                 )
-            else:  # ban
+            else: 
                 dm_embed.add_field(
                     name="⛔ עונש חמור",
-                    value="הורחקת מהשרת ל-24 שעות (ban). לאחר הזמן תוכל לחזר אוטומטית.",
+                    value="הורחקת מהשרת ל-24 שעות (ban). לאחר הזמן תוכל לחזור אוטומטית.",
                     inline=False
                 )
             await message.author.send(embed=dm_embed)
         except discord.Forbidden:
-            pass  # לא ניתן לשלוח DM
+            pass 
 
-        # ביצוע העונש בפועל
         if penalty_type == "timeout":
             timeout_duration = datetime.now(timezone.utc) + timedelta(minutes=duration_minutes)
             try:
                 await message.author.timeout(timeout_duration, reason="שליחת קישורים")
             except Exception:
                 pass
-        else:  # ban
+        else: 
             try:
                 await message.guild.ban(message.author, reason="שליחת קישורים (אזהרה שלישית)", delete_message_days=1)
-                # תזמון ביטול הבאן לאחר 24 שעות
                 async def unban_after_24h():
-                    await asyncio.sleep(86400)  # 24 שעות
+                    await asyncio.sleep(86400) 
                     try:
                         await message.guild.unban(message.author, reason="תום תקופת הבאן")
                     except discord.NotFound:
-                        pass  # המשתמש כבר לא בשרת או שהבאן בוטל
+                        pass 
                 asyncio.create_task(unban_after_24h())
             except discord.Forbidden:
-                pass  # אין הרשאה לבאנ
+                pass 
 
-        return  # לא להמשיך לעיבוד פקודות
+        return 
 
     await bot.process_commands(message)
 
-# ========== פונקציית עדכון הסטטוס המוגנת ==========
 async def update_bot_presence():
     total_members = sum((guild.member_count or 0) for guild in bot.guilds)
     activity = discord.Activity(
@@ -820,230 +810,7 @@ async def on_member_remove(member: discord.Member):
     except Exception:
         pass
 
-# ========== אירוע להתחברות הבוט (מוגן לחלוטין) ==========
-@bot.event
-async def on_ready():
-    try:
-        bot.add_view(CreateTicketView())
-        bot.add_view(TicketControlView())
-        bot.add_view(CheckInvitesView())
-        bot.add_view(DropView())
-        bot.add_view(DMPanelView())
-        bot.add_view(IPButton())
-        bot.add_view(IPPanelView())
-        bot.add_view(ReviewPanelView())
-    except Exception as e:
-        print(f"Error adding views: {e}")
-
-    try:
-        await update_bot_presence()
-        print("Bot status successfully set!")
-    except Exception as e:
-        print(f"Error setting bot presence: {e}")
-
-    print(f'הבוט מחובר בתור {bot.user}')
-
-# ========== פקודות ==========
-@bot.command(name='setup_ai', aliases=['ai_setup'])
-@is_allowed_user()
-async def setup_ai_channel(ctx):
-    try:
-        await ctx.message.delete()
-    except Exception:
-        pass
-
-    settings = load_settings()
-    settings["ai_channel_id"] = ctx.channel.id
-    save_settings(settings)
-
-    embed = discord.Embed(
-        title="🤖 ערוץ AI הוגדר בהצלחה!",
-        description=f"מהיום הערוץ {ctx.channel.mention} מוגדר כערוץ AI רשמי.\nכל הודעה שנשלחת כאן תקבל מענה אוטומטי מה-AI!",
-        color=discord.Color.green()
-    )
-    await ctx.send(embed=embed)
-
-@bot.command(name='ip')
-async def ip_command(ctx):
-    await ctx.send("🌐 **לחץ על הכפתור לבדיקת IP:**", view=IPButton())
-
-@bot.command(name='ipbutton')
-@is_allowed_user()
-async def ipbutton_command(ctx):
-    try:
-        await ctx.message.delete()
-    except Exception:
-        pass
-    await ctx.send("🌐 **לחץ על הכפתור לבדיקת IP:**", view=IPButton())
-
-@bot.command(name='setup_ip')
-@is_allowed_user()
-async def setup_ip_panel(ctx):
-    try:
-        await ctx.message.delete()
-    except Exception:
-        pass
-    embed = discord.Embed(
-        title="🌐 בדיקת IP",
-        description="לחץ על הכפתור למטה לבדיקת כתובת IP.\nכל התוצאות יישלחו אליך בהודעה פרטית!",
-        color=discord.Color.blue()
-    )
-    await ctx.send(embed=embed, view=IPPanelView())
-
-@bot.command()
-@is_allowed_user()
-async def senddm(ctx, user: discord.User = None, *, message_text: str = None):
-    try:
-        await ctx.message.delete()
-    except Exception:
-        pass
-
-    if not user or (not message_text and not ctx.message.attachments):
-        await ctx.send("❌ שימוש שגוי! דוגמה: `!senddm @user ההודעה שלך`", delete_after=6)
-        return
-
-    embed = discord.Embed(
-        title="📩 קיבלת הודעה מצוות הנהלת השרת",
-        description=message_text if message_text else "",
-        color=discord.Color.blue()
-    )
-    embed.set_footer(text=f"נשלח משרת {ctx.guild.name}")
-
-    files_to_send = []
-    for attachment in ctx.message.attachments:
-        file = await attachment.to_file()
-        files_to_send.append(file)
-
-    try:
-        await user.send(embed=embed, files=files_to_send)
-        await ctx.send(f"✅ ההודעה (והקבצים) נשלחו בהצלחה ל-{user.mention}!", delete_after=5)
-    except discord.Forbidden:
-        await ctx.send(f"❌ המשתמש {user.mention} סגר את ההודעות הפרטיות שלו.", delete_after=5)
-
-@bot.command()
-@is_allowed_user()
-async def setup_dmpanel(ctx):
-    try:
-        await ctx.message.delete()
-    except Exception:
-        pass
-
-    embed = discord.Embed(
-        title="✉️ פאנל שליחת הודעות פרטיות",
-        description="לחץ על הכפתור למטה כדי לפתוח חלון לשליחת הודעה פרטית בדיסקורד לפי ID.",
-        color=discord.Color.blue()
-    )
-    await ctx.send(embed=embed, view=DMPanelView())
-
-@bot.command()
-@is_allowed_user()
-async def setup_leaderboard(ctx):
-    try:
-        await ctx.message.delete()
-    except Exception:
-        pass
-    embed = create_leaderboard_embed(ctx.guild)
-    msg = await ctx.send(embed=embed)
-    data = load_tickets_data()
-    data["channel_id"] = ctx.channel.id
-    data["message_id"] = msg.id
-    save_tickets_data(data)
-    await ctx.send("✅ ערוץ לוח המובילים של הטיקטים הוגדר בהצלחה!", delete_after=5)
-
-@bot.command()
-@is_allowed_user()
-async def reset_tickets(ctx):
-    try:
-        await ctx.message.delete()
-    except Exception:
-        pass
-    data = load_tickets_data()
-    data["users"] = {}
-    save_tickets_data(data)
-    await update_leaderboard(ctx.guild)
-    await ctx.send("🧹 ספירת הטיקטים אופסה בהצלחה!", delete_after=5)
-
-@bot.command()
-@is_allowed_user()
-async def setinvites(ctx, member: discord.Member = None, amount: int = None):
-    try:
-        await ctx.message.delete()
-    except Exception:
-        pass
-    if not member or amount is None:
-        await ctx.send("❌ שימוש שגוי! דוגמה: `!setinvites @user 5`", delete_after=5)
-        return
-    data = load_invites_data()
-    data[str(member.id)] = amount
-    save_invites_data(data)
-    await ctx.send(f"✅ עודכן בהצלחה! ל-{member.mention} יש עכשיו **{amount}** הזמנות.")
-
-@bot.command(name="מחיקה", aliases=["clear", "purge"])
-@is_allowed_user()
-async def clear_messages(ctx, amount: int = None):
-    try:
-        await ctx.message.delete()
-    except Exception:
-        pass
-    if amount is None or amount <= 0:
-        warning_msg = await ctx.send("❌ יש לציין מספר הודעות למחיקה!")
-        await asyncio.sleep(4)
-        await warning_msg.delete()
-        return
-    deleted = await ctx.channel.purge(limit=amount)
-    info_msg = await ctx.send(f"🧹 נמחקו בהצלחה **{len(deleted)}** הודעות!")
-    await asyncio.sleep(3)
-    await info_msg.delete()
-
-@bot.command()
-@is_allowed_user()
-async def setup_invites(ctx):
-    try:
-        await ctx.message.delete()
-    except Exception:
-        pass
-    embed = discord.Embed(
-        title="📊 בדיקת הזמנות",
-        description="רוצה לדעת כמה חברים הזמנת לשרת?\nלחץ על הכפתור למטה והבוט ישלח לך את הנתונים בפרטי!",
-        color=discord.Color.blue(),
-    )
-    await ctx.send(embed=embed, view=CheckInvitesView())
-
-@bot.command(name="drop", aliases=["DROP"])
-@is_allowed_user()
-async def drop_command(ctx, *, prize: str = None):
-    try:
-        await ctx.message.delete()
-    except Exception:
-        pass
-    if not prize:
-        warning_msg = await ctx.send("❌ יש לציין את מהות הזכייה!")
-        await asyncio.sleep(5)
-        await warning_msg.delete()
-        return
-    embed = discord.Embed(
-        title="🎁 דרופ חדש בשרת!",
-        description="מי שלוחץ ראשון על הכפתור למטה זוכה בדרופ!",
-        color=discord.Color.gold(),
-    )
-    embed.add_field(name="🏆 זכייה:", value=f"**{prize}**", inline=False)
-    await ctx.send(embed=embed, view=DropView(prize=prize))
-
-@bot.command()
-@is_allowed_user()
-async def setup_ticket(ctx):
-    try:
-        await ctx.message.delete()
-    except Exception:
-        pass
-    embed = discord.Embed(
-        title="🎫 מערכת תמיכה ופניות",
-        description="זקוק לעזרה? רוצה לפתוח פנייה לצוות השרת?\nלחץ על הכפתור למטה כדי לפתוח טיקט פרטי!",
-        color=discord.Color.gold(),
-    )
-    await ctx.send(embed=embed, view=CreateTicketView())
-
-keep_alive()
-
-TOKEN = os.environ.get("DISCORD_TOKEN")
-bot.run(TOKEN)
+# ==========================================
+# הפעלת הבוט (שמור על הטוקן שלך מוגן)
+# keep_alive()  # הפעל את זה אם אתה בשרת כמו Render
+# bot.run("YOUR_BOT_TOKEN")
