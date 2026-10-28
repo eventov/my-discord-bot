@@ -11,7 +11,7 @@ intents.members = True          # חובה כדי לתת רולים למשתמש
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 # הגדר כאן את ה-ID של הרול שיתקבל בלחיצה על הכפתור
-ROLE_ID = YOUR_ROLE_ID_HERE  # החלף במספר ה-ID של הרול (לדוגמה: 123456789012345678)
+ROLE_ID = 1550851467361919057  # החלף במספר ה-ID של הרול (לדוגמה: 123456789012345678)
 
 @bot.event
 async def on_ready():
